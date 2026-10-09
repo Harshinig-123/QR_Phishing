@@ -1,5 +1,9 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+*.pyc
+corrupt_test.png
+venv/
+.venv/
 *.py[codz]
 *$py.class
 
