@@ -1,109 +1,127 @@
 """
 test_feature_extractor.py
 -------------------------
-Unit tests for Stage 3 feature extraction logic against known URL patterns:
-  1. IP address URL
-  2. URL containing '@' symbol
-  3. Long URL (>75 characters)
-  4. Shortener URL (bit.ly / tinyurl)
-  5. Normal legitimate HTTPS URL
-  6. URL with double-slash redirect in path
-  7. URL with non-standard port
-  8. Deceptive HTTPS token in domain
-  9. Malformed / empty / invalid URLs
+Unit tests for Stage 3 feature extraction logic:
+  1. IP address URLs (is_ip_host = 1)
+  2. URLs containing '@' symbol (has_at_symbol = 1, count_at >= 1)
+  3. Long URLs (url_length accurately measured)
+  4. Punycode IDN URLs (has_punycode = 1)
+  5. Shortener URLs (is_known_shortener = 1)
+  6. Normal legitimate HTTPS URLs (is_https = 1, is_ip_host = 0)
+  7. Malformed, empty, and garbage inputs (safe defaults, never raises)
+  8. Static safety verification: monkeypatches socket to raise an exception,
+     proving feature extraction makes zero network calls.
 """
 
+import socket
+import sys
 import unittest
+from pathlib import Path
+
+# Ensure stage3_ml directory is in sys.path so tests can run from anywhere
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 from feature_extractor import extract_ml_features, extract_feature_vector, FEATURE_ORDER
 
 
 class TestFeatureExtractor(unittest.TestCase):
 
-    def test_normal_legitimate_url(self):
-        """Standard clean HTTPS URL should evaluate as legitimate (all 1s)."""
+    def test_normal_legitimate_https_url(self):
+        """Standard HTTPS URL should produce expected structural values."""
         url = "https://www.google.com"
         features = extract_ml_features(url)
-        self.assertEqual(features["having_ip_address"], 1)
-        self.assertEqual(features["url_length"], 1)  # < 54 chars
-        self.assertEqual(features["shortining_service"], 1)
-        self.assertEqual(features["having_at_symbol"], 1)
-        self.assertEqual(features["double_slash_redirecting"], 1)
-        self.assertEqual(features["prefix_suffix"], 1)
-        self.assertEqual(features["sslfinal_state"], 1)
-        self.assertEqual(features["port"], 1)
-        self.assertEqual(features["https_token"], 1)
+        self.assertEqual(features["is_https"], 1)
+        self.assertEqual(features["is_ip_host"], 0)
+        self.assertEqual(features["has_at_symbol"], 0)
+        self.assertEqual(features["num_subdomains"], 0)
+        self.assertEqual(features["has_punycode"], 0)
+        self.assertEqual(features["has_port"], 0)
+        self.assertEqual(features["is_known_shortener"], 0)
+        self.assertGreater(features["letter_ratio"], 0.5)
 
     def test_ip_address_url(self):
-        """URL with IP address as hostname should be flagged with having_ip_address = -1."""
-        url = "http://192.168.1.50/login/secure-update"
+        """URL with IP address host must be flagged with is_ip_host = 1."""
+        url = "http://192.168.1.50:8080/login/update"
         features = extract_ml_features(url)
-        self.assertEqual(features["having_ip_address"], -1)
-        self.assertEqual(features["sslfinal_state"], -1)  # http -> -1
+        self.assertEqual(features["is_ip_host"], 1)
+        self.assertEqual(features["is_https"], 0)
+        self.assertEqual(features["has_port"], 1)
+        self.assertEqual(features["non_standard_port"], 1)
+        self.assertEqual(features["path_depth"], 2)
+        self.assertGreaterEqual(features["suspicious_keyword_count"], 1)
 
     def test_at_symbol_url(self):
-        """URL with '@' symbol should be flagged with having_at_symbol = -1."""
+        """URL with '@' symbol must be detected in both boolean and count features."""
         url = "http://legit-service.com@evil-phish.net/login"
         features = extract_ml_features(url)
-        self.assertEqual(features["having_at_symbol"], -1)
+        self.assertEqual(features["has_at_symbol"], 1)
+        self.assertEqual(features["count_at"], 1)
 
     def test_long_url(self):
-        """URL with > 75 characters should be flagged with url_length = -1."""
-        url = "https://example.com/very/long/path/with/lots/of/parameters/and/tokens/that/exceeds/seventy-five/characters"
-        self.assertGreater(len(url), 75)
+        """Length features must accurately measure long URLs."""
+        url = "https://example.com/" + "subpath/" * 15 + "?param=value&token=123456789"
         features = extract_ml_features(url)
-        self.assertEqual(features["url_length"], -1)
+        self.assertEqual(features["url_length"], len(url))
+        self.assertGreater(features["path_depth"], 10)
+        self.assertEqual(features["count_ampersand"], 1)
 
-    def test_medium_url_length(self):
-        """URL between 54 and 75 characters should evaluate to 0 (suspicious)."""
-        url = "https://example.com/" + "a" * 40  # 20 + 40 = 60 chars
-        self.assertTrue(54 <= len(url) <= 75)
+    def test_punycode_url(self):
+        """IDN homograph URLs containing 'xn--' must be flagged."""
+        url = "http://xn--pple-43d.com/secure-signin"
         features = extract_ml_features(url)
-        self.assertEqual(features["url_length"], 0)
+        self.assertEqual(features["has_punycode"], 1)
 
     def test_shortener_url(self):
-        """Known URL shortener should be flagged with shortining_service = -1."""
-        url = "https://bit.ly/3xPh1sh"
+        """Known URL shortener domains must be identified."""
+        url = "https://bit.ly/secure-redirect-3x"
         features = extract_ml_features(url)
-        self.assertEqual(features["shortining_service"], -1)
+        self.assertEqual(features["is_known_shortener"], 1)
 
-    def test_prefix_suffix_hyphen(self):
-        """Domain with hyphen should be flagged with prefix_suffix = -1."""
-        url = "https://paypal-security-update.com/signin"
+    def test_double_slash_in_path(self):
+        """URL containing '//' in path must be flagged for open redirect risk."""
+        url = "https://bank.com//redirect?target=http://evil.com"
         features = extract_ml_features(url)
-        self.assertEqual(features["prefix_suffix"], -1)
+        self.assertEqual(features["has_double_slash_in_path"], 1)
 
-    def test_subdomains(self):
-        """Multiple subdomains should be flagged with having_sub_domain = -1."""
-        url = "https://login.verify.account.chase.com"
-        features = extract_ml_features(url)
-        self.assertEqual(features["having_sub_domain"], -1)
-
-    def test_double_slash_redirect(self):
-        """URL with '//' in the path should be flagged with double_slash_redirecting = -1."""
-        url = "http://example.com//redirect-path"
-        features = extract_ml_features(url)
-        self.assertEqual(features["double_slash_redirecting"], -1)
-
-    def test_non_standard_port(self):
-        """URL specifying an unusual port should be flagged with port = -1."""
-        url = "http://example.com:8080/portal"
-        features = extract_ml_features(url)
-        self.assertEqual(features["port"], -1)
-
-    def test_https_token_in_domain(self):
-        """URL embedding 'https' into its domain body should be flagged with https_token = -1."""
-        url = "http://https-paypal.com"
-        features = extract_ml_features(url)
-        self.assertEqual(features["https_token"], -1)
-
-    def test_malformed_and_empty_urls(self):
-        """Malformed or empty inputs must never crash and must return valid vector."""
-        for bad_input in ["", "   ", "not a url", "http://", None, 12345]:
-            features = extract_ml_features(bad_input)
-            self.assertIsInstance(features, dict)
-            self.assertEqual(len(features), len(FEATURE_ORDER))
-            vec = extract_feature_vector(bad_input)
+    def test_malformed_and_empty_inputs(self):
+        """Empty, non-string, and garbage inputs must never raise exceptions."""
+        bad_inputs = ["", "   ", None, 12345, "not_a_url_at_all!!@#$%", "http://", "://broken"]
+        for bad in bad_inputs:
+            feats = extract_ml_features(bad)
+            self.assertIsInstance(feats, dict)
+            self.assertEqual(len(feats), len(FEATURE_ORDER))
+            vec = extract_feature_vector(bad)
             self.assertEqual(len(vec), len(FEATURE_ORDER))
+            self.assertTrue(all(isinstance(v, (int, float)) for v in vec))
+
+    def test_zero_network_calls_guarantee(self):
+        """
+        Monkeypatches socket.socket and socket.getaddrinfo to raise errors.
+        Proves that feature extraction is 100% static and performs ZERO network I/O.
+        """
+        def forbidden_call(*args, **kwargs):
+            raise AssertionError("CRITICAL VIOLATION: Network socket operation attempted during static extraction!")
+
+        orig_socket = socket.socket
+        orig_getaddrinfo = socket.getaddrinfo
+        try:
+            socket.socket = forbidden_call
+            socket.getaddrinfo = forbidden_call
+
+            test_urls = [
+                "https://www.google.com",
+                "http://192.168.1.1/admin",
+                "https://bit.ly/test",
+                "http://fake-domain-that-does-not-exist-anywhere-in-dns.xyz/login",
+            ]
+            for u in test_urls:
+                feats = extract_ml_features(u)
+                self.assertEqual(len(feats), len(FEATURE_ORDER))
+        finally:
+            socket.socket = orig_socket
+            socket.getaddrinfo = orig_getaddrinfo
 
 
 if __name__ == "__main__":

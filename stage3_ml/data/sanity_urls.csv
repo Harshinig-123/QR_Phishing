@@ -1,0 +1,32 @@
+url,expected_type,notes
+https://www.google.com,legitimate,Major search engine - standard clean HTTPS
+https://www.github.com,legitimate,Developer platform - clean HTTPS domain
+https://www.wikipedia.org,legitimate,Encyclopedia reference site
+https://www.amazon.com,legitimate,E-commerce platform
+https://www.python.org,legitimate,Official programming language documentation
+https://stackoverflow.com,legitimate,Technical developer community
+https://www.microsoft.com,legitimate,Corporate software site
+https://www.apple.com,legitimate,Hardware and software vendor
+https://www.stanford.edu,legitimate,Academic institution (.edu)
+https://www.gov.uk,legitimate,Government portal with ccTLD (.gov.uk)
+https://www.cloudflare.com,legitimate,CDN and security infrastructure
+https://www.bbc.com/news,legitimate,International news portal with standard path
+http://192.168.1.50/login/update,phishing,Synthetic: raw IPv4 host with credential path over HTTP
+http://10.0.0.1/admin/auth/signin,phishing,Synthetic: private IP host with sensitive auth endpoints
+http://172.16.254.1/banking/secure-verify,phishing,Synthetic: IP address with banking keywords
+http://paypal.com@evil-phish.net/login,phishing,Synthetic: @ symbol obfuscation masking real destination
+http://google.com@attacker-site.org/auth,phishing,Synthetic: @ authority delimiter disguise
+https://secure.chase.com@192.168.1.1/signin,phishing,Synthetic: @ symbol combined with raw IP host
+https://paypal-security-update-verify.com/signin,phishing,Synthetic: hyphenated brand impersonation
+http://appleid-support-icloud-verify.net/reset,phishing,Synthetic: multiple hyphenated brand keywords
+http://netflix-billing-update-account.com/portal,phishing,Synthetic: subscription brand impersonation
+https://login.verify.account.security.banking.evil.com/signin,phishing,Synthetic: extreme subdomain nesting
+http://secure.account.update.auth.chase.bank.xyz/portal,phishing,Synthetic: 5 subdomains with high-abuse TLD
+http://xn--pple-43d.com/login,phishing,Synthetic: punycode IDN homograph attack
+http://xn--gogle-pqa.com/auth,phishing,Synthetic: punycode homograph targeting Google
+http://malicious-gateway.net/very/long/nested/path/to/phishing/credential/harvester/index.php?token=9384723847239847239487239847293847298347,phishing,Synthetic: excessive URL length with token stuffing
+http://fake-banking-portal.com:8443/login,phishing,Synthetic: explicit non-standard port 8443 over HTTP
+http://verify-crypto-wallet.net:8080/auth,phishing,Synthetic: non-standard port 8080 with crypto keyword
+https://bit.ly/3xPh1sh-sample,phishing,Synthetic: known shortener concealing payload
+http://tinyurl.com/fake-login-sample,phishing,Synthetic: URL shortener with login token
+http://https-paypal-verify.com/login,phishing,Synthetic: deceptive https token inside domain body over HTTP

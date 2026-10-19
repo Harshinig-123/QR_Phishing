@@ -1,73 +1,72 @@
-# Stage 3: Feature Analysis & Selection
+# Stage 3 Feature Selection & Excluded Feature Rationale
 
-## 1. Overview
-The **UCI Phishing Websites Dataset (UCI ID 327)** contains **30 categorical features** extracted from phishing and legitimate websites. In the original research by Mohammad, Thabtah, and McCluskey, these features are divided into four primary groups:
-1. **Address Bar Based Features** (lexical and URL syntactic properties)
-2. **Abnormal Based Features** (WHOIS, host identity verification)
-3. **HTML and JavaScript Based Features** (DOM structure, scripts, form actions)
-4. **Domain Based Features** (external third-party reputations, Alexa traffic, PageRank)
-
-### QR Phishing Detection Constraint
-In a real-world QR code security scanner:
-- The system frequently operates in low-latency, privacy-preserving, or offline/restricted-connectivity environments.
-- Fetching live web pages introduces security risks (drive-by malware downloads, tracking beacons, triggering one-time attacker tokens).
-- Querying external third-party services (WHOIS, Alexa, Google Index) introduces rate limits, network latency, and privacy leakage.
-
-Therefore, Stage 3 ML classification strictly utilizes **only features that can be computed deterministically from the raw URL string**.
+This document details the **30 lexical and structural URL features** extracted in Stage 3 (`feature_extractor.py`), their alignment with Stage 2 heuristic rules, and the strict technical rationale for excluding network, DOM, and reputation features.
 
 ---
 
-## 2. Comprehensive Analysis of all 30 UCI Features
+## 1. Static URL-Only Feature Set (30 Features)
 
-| # | Feature Name | Computable from URL Alone? | Computation Method / Mapping Rule | Reason for Exclusion (if Not Computable) |
-|---|---|:---:|---|---|
-| 1 | `having_ip_address` | **Yes** | Check if hostname is an IPv4 or IPv6 address (using Python `ipaddress` module or hex/octal pattern).<br>**UCI Encoding**: `-1` if IP used (phishing), `1` if domain used (legitimate). | *Included* |
-| 2 | `url_length` | **Yes** | Character count of the entire URL string.<br>**UCI Encoding**: `1` if length < 54 (legitimate), `0` if 54 ≤ length ≤ 75 (suspicious), `-1` if length > 75 (phishing). | *Included* |
-| 3 | `shortining_service` | **Yes** | Check hostname against known shortening domains (`bit.ly`, `tinyurl.com`, `t.co`, etc.).<br>**UCI Encoding**: `-1` if shortener used (phishing), `1` otherwise (legitimate). | *Included* |
-| 4 | `having_at_symbol` | **Yes** | Check if `@` character is present anywhere in the URL string.<br>**UCI Encoding**: `-1` if `@` present (phishing), `1` otherwise (legitimate). | *Included* |
-| 5 | `double_slash_redirecting` | **Yes** | Check if `//` appears after the protocol scheme delimiter (index > 7, e.g. `http://example.com//path`).<br>**UCI Encoding**: `-1` if redirecting `//` present (phishing), `1` otherwise (legitimate). | *Included* |
-| 6 | `prefix_suffix` | **Yes** | Check if a hyphen (`-`) appears in the registered domain part of hostname.<br>**UCI Encoding**: `-1` if hyphen in domain body (phishing), `1` otherwise (legitimate). | *Included* |
-| 7 | `having_sub_domain` | **Yes** | Count dots in hostname after stripping `www` and TLD.<br>**UCI Encoding**: `1` if dots ≤ 1 / no subdomains (legitimate), `0` if dots = 2 / 1 subdomain (suspicious), `-1` if dots ≥ 3 / multi-subdomains (phishing). | *Included* |
-| 8 | `sslfinal_state` | **Yes (Approximated)** | In UCI, checks SSL certificate issuer and validity. Approximated from URL scheme: `https` indicates SSL presence.<br>**UCI Encoding**: `1` if `https://` (legitimate), `-1` if `http://` (phishing). | *Included (Approximated)* |
-| 9 | `domain_registration_length` | **No** | Requires querying WHOIS registry database for domain expiration date. | External network/WHOIS lookup required; slow and unreliable for real-time QR scanning. |
-| 10 | `favicon` | **No** | Requires fetching page HTML and verifying whether `<link rel="icon">` loads from an external domain. | Requires downloading external webpage HTML payload. |
-| 11 | `port` | **Yes** | Extract port number from URL (via `urllib.parse.urlparse`).<br>**UCI Encoding**: `1` if standard port (80, 443, or omitted), `-1` if explicit non-standard port specified (phishing). | *Included* |
-| 12 | `https_token` | **Yes** | Check if string token `https` is present inside the hostname/domain component (e.g. `http://https-secure-bank.com`).<br>**UCI Encoding**: `-1` if token in domain (phishing), `1` otherwise (legitimate). | *Included* |
-| 13 | `request_url` | **No** | Measures percentage of external assets (images, multimedia) loaded in webpage DOM. | Requires downloading and parsing complete HTML DOM. |
-| 14 | `url_of_anchor` | **No** | Measures percentage of `<a>` tags with empty, foreign, or `#` href values. | Requires downloading and parsing complete HTML DOM. |
-| 15 | `links_in_tags` | **No** | Measures percentage of `<meta>`, `<script>`, and `<link>` tags pointing to other domains. | Requires downloading and parsing complete HTML DOM. |
-| 16 | `sfh` (Server Form Handler) | **No** | Checks `<form action="...">` attributes for blank strings or foreign domains. | Requires downloading and parsing complete HTML DOM. |
-| 17 | `submitting_to_email` | **No** | Checks if page uses `mailto:` or server-side mail functions in forms. | Requires downloading and parsing webpage content. |
-| 18 | `abnormal_url` | **No** | Compares host identity against WHOIS registrant name. | Requires external WHOIS database query. |
-| 19 | `redirect` | **No** | Measures number of HTTP 301/302 redirects (0-1 vs 2-4 vs 4+). | Requires active HTTP connection and network traversal; not static URL computable. |
-| 20 | `on_mouseover` | **No** | Checks JavaScript `window.status` event modifications. | Requires downloading and parsing JavaScript execution. |
-| 21 | `rightclick` | **No** | Checks if JavaScript disables right-click context menu (`event.button==2`). | Requires downloading and parsing JavaScript code. |
-| 22 | `popupwindow` | **No** | Checks if webpage triggers JavaScript popup dialogs with input fields. | Requires executing and rendering browser DOM. |
-| 23 | `iframe` | **No** | Checks for invisible or borderless `<iframe>` elements in HTML. | Requires downloading and parsing complete HTML DOM. |
-| 24 | `age_of_domain` | **No** | Computes duration since domain creation date via WHOIS. | Requires external WHOIS database query. |
-| 25 | `dnsrecord` | **No** | Validates if domain has active DNS A / SOA records. | Requires live DNS lookup query. |
-| 26 | `web_traffic` | **No** | Looks up Alexa / SimilarWeb rank of the website. | Requires external commercial traffic ranking API. |
-| 27 | `page_rank` | **No** | Looks up Google PageRank score of the domain. | Requires external PageRank API (now deprecated). |
-| 28 | `google_index` | **No** | Checks whether the URL is indexed by Google Search. | Requires scraping or querying Google search index. |
-| 29 | `links_pointing_to_page` | **No** | Computes external backlink count to the URL. | Requires external backlink/SEO database. |
-| 30 | `statistical_report` | **No** | Checks whether host matches PhishTank or StopBadware blacklists. | Requires external threat intelligence API lookup. |
+All 30 features are computed **100% statically** from the raw URL string using Python's standard library (`urllib.parse`, `re`, `math`). No network calls, socket connections, DNS requests, or external lookups are ever performed.
+
+| # | Feature Name | Computation / Extraction Method | Related Stage 2 Heuristic Rule |
+|---|---|---|---|
+| 1 | `url_length` | Total character count `len(url)` | Long URL check (>75 / >=54 chars) |
+| 2 | `hostname_length` | Character count of parsed hostname | Excessive domain length obfuscation |
+| 3 | `path_length` | Character count of URL path component | Deep directory camouflage |
+| 4 | `query_length` | Character count of query string | Parameter stuffing & token hiding |
+| 5 | `count_dots` | Count of `.` in entire URL | Domain & file extension obfuscation |
+| 6 | `count_hyphens` | Count of `-` in entire URL | Brand spoofing hyphen check |
+| 7 | `count_digits` | Total numeric characters `[0-9]` | Random subdomain / ID generation |
+| 8 | `count_underscores` | Count of `_` in URL | Non-standard URL structure |
+| 9 | `count_slashes` | Count of `/` across URL | Directory nesting & redirection |
+| 10 | `count_at` | Count of `@` in URL | Stage 2 `@` symbol obfuscation |
+| 11 | `count_question` | Count of `?` in URL | Dynamic query manipulation |
+| 12 | `count_equal` | Count of `=` in URL | Parameter assignment frequency |
+| 13 | `count_ampersand` | Count of `&` in URL | Multi-parameter payload staging |
+| 14 | `count_percent` | Count of `%` in URL | Hex / percent URL-encoding |
+| 15 | `digit_ratio` | `count_digits / url_length` | Automated / algorithmic URL generation |
+| 16 | `letter_ratio` | `letter_count / url_length` | Lexical naturalness metric |
+| 17 | `special_char_ratio` | `(url_len - digits - letters) / url_len` | Punctuation / obfuscation density |
+| 18 | `is_ip_host` | Binary (1 if IPv4/IPv6 literal or hex/int IP, 0 else) | Stage 2 Raw IP Host rule (+35 pts) |
+| 19 | `has_at_symbol` | Binary (1 if `@` in URL, 0 else) | Stage 2 `@` Symbol rule (+30 pts) |
+| 20 | `is_https` | Binary (1 if scheme == `https`, 0 else) | Stage 2 Insecure HTTP rule (+10 pts) |
+| 21 | `num_subdomains` | Subdomain count excluding `www` and base domain | Stage 2 Deep Subdomain Nesting (+15 pts) |
+| 22 | `path_depth` | Count of directory levels in path | Directory depth / fake path hierarchy |
+| 23 | `has_port` | Binary (1 if explicit `:port` present, 0 else) | Stage 2 Port presence check |
+| 24 | `non_standard_port` | Binary (1 if port not in {80, 443}, 0 else) | Stage 2 Non-standard Port rule (+15 pts) |
+| 25 | `has_punycode` | Binary (1 if `xn--` in hostname, 0 else) | IDN homograph attack detection |
+| 26 | `hostname_entropy` | Shannon character entropy: $-\sum p \log_2 p$ | Algorithmic domain generation (DGA) |
+| 27 | `longest_token_length` | Max length of token split by `.` / `-` / `_` | Long pseudo-brand token obfuscation |
+| 28 | `suspicious_keyword_count` | Count of matched keywords from Stage 2 | Stage 2 Credential Keywords (+25 pts) |
+| 29 | `is_known_shortener` | Binary (1 if host matches Stage 2 shorteners) | Stage 2 Shortener Detection (+15 pts) |
+| 30 | `has_double_slash_in_path`| Binary (1 if `//` appears inside path) | Stage 2 Double Slash Redirect (+15 pts) |
 
 ---
 
-## 3. Selected Feature Set for Model Training
+## 2. Deliberately Excluded Data Sources & Features
 
-The following **10 features** are strictly computable from the URL string and correspond directly to the UCI dataset columns:
+In academic literature (e.g. models trained on the original 30-feature UCI dataset), classifiers claim 95–97% accuracy by relying heavily on external web requests and page inspection. In the **Quishing Shield** project, all such features are **strictly and deliberately excluded**:
 
-1. `having_ip_address`
-2. `url_length`
-3. `shortining_service`
-4. `having_at_symbol`
-5. `double_slash_redirecting`
-6. `prefix_suffix`
-7. `having_sub_domain`
-8. `sslfinal_state`
-9. `port`
-10. `https_token`
+### A. Webpage Content & DOM Features (Excluded)
+* **Excluded:** `LineOfCode`, `LargestLineLength`, `HasTitle`, `TitleMatchScore`, `HasFavicon`, `Robots`, `IsResponsive`, `HasDescription`, `NoOfPopup`, `NoOfiFrame`, `HasExternalFormSubmit`, `HasHiddenFields`, `HasPasswordField`, `Bank`/`Pay`/`Crypto` content tags, `NoOfImage`, `NoOfCSS`, `NoOfJS`.
+* **Reason for Exclusion:** 
+  1. **Drive-by Malware & Zero-Day Safety:** QR code scanning is an untrusted endpoint action. Fetching HTML/JavaScript from an unverified adversary server can trigger browser exploits, session hijacking, or malicious payload execution.
+  2. **Latency:** QR scanning requires instantaneous classification (<15ms). Downloading megabytes of DOM assets over mobile cellular connections introduces unacceptable latency (2–5 seconds).
+  3. **Ephemeral Landing Pages:** Phishing campaigns frequently employ cloaking (returning 404 or blank pages to crawlers while serving phishing kits to mobile user agents).
 
-### Benchmark Context for University Report
-In academic literature, training on all 30 UCI features often achieves **~95% to 97% accuracy** because features like `sslfinal_state` (full cert check), `url_of_anchor`, `web_traffic`, and `prefix_suffix` provide strong signals from the rendered webpage and commercial services. When constrained to **purely URL-based features** (10 features), the model is lightweight, fast, and does not need to download potentially malicious web content. We report the performance honestly in our evaluation.
+### B. Network, DNS & WHOIS Features (Excluded)
+* **Excluded:** `dnsrecord`, `age_of_domain`, `domain_registration_length`, reverse DNS lookups, registrar details.
+* **Reason for Exclusion:**
+  1. **Privacy:** Performing DNS and WHOIS lookups exposes user browsing habits and location to network intermediaries and recursive resolvers.
+  2. **DNS Rate Limiting & Failures:** Public WHOIS servers rate-limit or block bulk queries; network timeouts can stall the classification pipeline.
+
+### C. Third-Party Traffic & PageRank Features (Excluded)
+* **Excluded:** `web_traffic`, `page_rank`, `google_index`, `links_pointing_to_page`.
+* **Reason for Exclusion:**
+  1. **Service Deprecation:** Alexa Rank and Google PageRank APIs have been discontinued or paywalled.
+  2. **Vendor Lock-in & Online Dependency:** An air-gapped or offline mobile security scanner must function reliably without external API subscription keys.
+
+### D. TLD and Domain Identity Memorization (Excluded)
+* **Excluded:** Categorical one-hot encodings of domain names (`Domain`) or top-level domains (`TLD`).
+* **Reason for Exclusion:**
+  1. **Dataset Shortcut / Memorization Bias:** Including categorical domain names causes decision trees to memorize benign domain strings (`google.com`, `wikipedia.org`) rather than learning structural attack signatures, resulting in poor out-of-sample generalization.

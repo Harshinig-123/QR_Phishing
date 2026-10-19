@@ -1,233 +1,271 @@
 """
 feature_extractor.py
 --------------------
-Stage 3: Feature Extractor for URL-based Phishing Classification.
+Stage 3: Purely Lexical/Structural Feature Extraction for URL Phishing Classification.
 
-Extracts the 10 URL-computable features corresponding to the UCI Phishing
-Websites Dataset (UCI ID 327) using exact UCI numerical encodings (-1, 0, 1):
-  1  = Legitimate
-  0  = Suspicious
- -1  = Phishing
-
-Where applicable, helper functions from Stage 2 (`stage2_heuristics.heuristics`)
-are imported and reused to avoid code duplication across project stages.
+Calculates 30 static, URL-computable features directly from the raw string.
+Guarantees 100% static execution:
+  - ZERO network calls (no DNS, no WHOIS, no HTTP requests, no sockets)
+  - Safe against malformed/empty/non-string inputs (never raises exceptions)
+  - No domain identity or TLD categorical features (prevents dataset memorization bias)
+  - Directly reuses Stage 2's canonical keyword & shortener definitions to maintain consistency
 """
 
+import math
 import os
+import re
 import sys
+from collections import Counter
+from pathlib import Path
 from typing import Dict, List, Any
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
-# Add Stage 2 to sys.path to reuse existing heuristic helpers
-STAGE2_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "stage2_heuristics"))
-if STAGE2_DIR not in sys.path:
-    sys.path.insert(0, STAGE2_DIR)
+# Locate Stage 2 directory to reuse canonical shortener and keyword definitions
+REPO_ROOT = Path(__file__).resolve().parent.parent
+STAGE2_DIR = REPO_ROOT / "stage2_heuristics"
+if str(STAGE2_DIR) not in sys.path:
+    sys.path.insert(0, str(STAGE2_DIR))
 
 try:
-    from heuristics import (
-        is_url_shortener,
-        check_ip_address,
-        check_at_symbol,
-        check_double_slash_redirect,
-        check_prefix_suffix_hyphen,
-        count_subdomains,
-    )
+    from heuristics import SHORTENER_DOMAINS, PHISHING_KEYWORDS
 except ImportError:
-    # Standalone fallback if Stage 2 is not in path
-    import ipaddress
+    # Safe standalone fallback in isolated environments
+    SHORTENER_DOMAINS = frozenset({
+        "bit.ly", "bitly.com", "j.mp", "tinyurl.com", "tiny.cc", "t.co", "goo.gl",
+        "ow.ly", "is.gd", "v.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at",
+        "rb.gy", "bl.ink", "lnkd.in", "t.ly", "s.id", "soo.gd", "qrco.de", "qr.net",
+        "1url.com", "adf.ly", "shorte.st", "x.co", "snip.ly", "short.io", "clck.ru",
+        "u.to", "trib.al", "dlvr.it", "fb.me", "tr.im", "urlz.fr", "shorturl.com",
+        "mcaf.ee", "po.st", "tny.im", "chilp.it", "bc.vc", "ouo.io", "gg.gg",
+    })
+    PHISHING_KEYWORDS = (
+        "login", "signin", "verify", "account", "banking", "secure", "password",
+        "wallet", "confirm", "webscr", "credential", "authenticate", "suspend",
+        "unlock", "billing",
+    )
 
-    KNOWN_SHORTENERS = {
-        "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd",
-        "buff.ly", "adf.ly", "bitly.com", "cutt.ly", "rb.gy", "shorturl.at",
-        "tiny.cc", "lnkd.in", "rebrand.ly", "v.gd", "qr.ae", "clck.ru",
-        "rotf.lol", "t.ly", "bc.vc", "s.id", "bl.ink", "trib.al"
-    }
+SECOND_LEVEL_LABELS = frozenset(
+    {"co", "com", "org", "net", "gov", "edu", "ac", "ne", "or", "go"}
+)
 
-    def is_url_shortener(url: str) -> bool:
-        try:
-            h = (urlparse(url).hostname or "").lower().strip()
-            return any(h == s or h.endswith("." + s) for s in KNOWN_SHORTENERS)
-        except Exception:
-            return False
-
-    def check_ip_address(hostname: str) -> bool:
-        if not hostname:
-            return False
-        host = hostname.split(":")[0].strip("[]")
-        try:
-            ipaddress.ip_address(host)
-            return True
-        except ValueError:
-            return False
-
-    def check_at_symbol(url: str) -> bool:
-        return "@" in url
-
-    def check_double_slash_redirect(url: str) -> bool:
-        return "//" in urlparse(url).path
-
-    def check_prefix_suffix_hyphen(hostname: str) -> bool:
-        if not hostname:
-            return False
-        parts = hostname.split(".")
-        body = ".".join(parts[:-1]) if len(parts) > 1 else parts[0]
-        return "-" in body
-
-    def count_subdomains(hostname: str) -> int:
-        if not hostname or check_ip_address(hostname):
-            return 0
-        parts = [p for p in hostname.split(".") if p]
-        return max(0, len(parts) - 2)
-
-
-# Canonical order of features expected by the trained ML models
 FEATURE_ORDER: List[str] = [
-    "having_ip_address",
     "url_length",
-    "shortining_service",
-    "having_at_symbol",
-    "double_slash_redirecting",
-    "prefix_suffix",
-    "having_sub_domain",
-    "sslfinal_state",
-    "port",
-    "https_token",
+    "hostname_length",
+    "path_length",
+    "query_length",
+    "count_dots",
+    "count_hyphens",
+    "count_digits",
+    "count_underscores",
+    "count_slashes",
+    "count_at",
+    "count_question",
+    "count_equal",
+    "count_ampersand",
+    "count_percent",
+    "digit_ratio",
+    "letter_ratio",
+    "special_char_ratio",
+    "is_ip_host",
+    "has_at_symbol",
+    "is_https",
+    "num_subdomains",
+    "path_depth",
+    "has_port",
+    "non_standard_port",
+    "has_punycode",
+    "hostname_entropy",
+    "longest_token_length",
+    "suspicious_keyword_count",
+    "is_known_shortener",
+    "has_double_slash_in_path",
 ]
 
 
-def extract_ml_features(url: str) -> Dict[str, int]:
+def _is_ip(hostname: str) -> bool:
+    """Pure static check for IPv4 or IPv6 literals, including hex/integer formats."""
+    h = hostname.strip("[]").lower()
+    if not h:
+        return False
+    parts = h.split(":")
+    clean_host = parts[0]
+    # Check standard IPv4 octets
+    octets = clean_host.split(".")
+    if len(octets) == 4:
+        try:
+            if all(0 <= int(x) <= 255 for x in octets):
+                return True
+        except ValueError:
+            pass
+    # Check hex or integer notation (e.g. 0x7f000001 or 2130706433)
+    if re.fullmatch(r"0x[0-9a-f]+", clean_host) or (clean_host.isdigit() and len(clean_host) >= 8):
+        return True
+    # Standard IPv6 colon check
+    if ":" in h and not re.search(r"[^0-9a-f:]", h):
+        return True
+    return False
+
+
+def _calculate_entropy(text: str) -> float:
+    """Computes Shannon entropy of character distribution in text."""
+    if not text:
+        return 0.0
+    length = len(text)
+    counts = Counter(text)
+    entropy = -sum((count / length) * math.log2(count / length) for count in counts.values())
+    return round(entropy, 4)
+
+
+def _count_subdomains(hostname: str) -> int:
+    """Calculates number of subdomain labels, handling ccTLD second level domains."""
+    if not hostname or _is_ip(hostname):
+        return 0
+    labels = [p for p in hostname.split(".") if p]
+    if labels and labels[0] == "www":
+        labels = labels[1:]
+    if len(labels) < 2:
+        return 0
+    base = 2
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in SECOND_LEVEL_LABELS:
+        base = 3  # e.g., co.uk, com.au
+    return max(0, len(labels) - base)
+
+
+def _safe_default_features() -> Dict[str, Any]:
+    """Default feature vector for empty or completely unparseable input."""
+    return {name: 0 if not name.endswith("_ratio") and not name.endswith("_entropy") else 0.0
+            for name in FEATURE_ORDER}
+
+
+def extract_ml_features(url: str) -> Dict[str, Any]:
     """
-    Extracts the 10 URL-computable features and maps them to the exact UCI
-    encoding (-1 for phishing, 0 for suspicious, 1 for legitimate).
-
-    Rules derived from UCI ID 327 specification:
-      1. having_ip_address:
-         - Phishing (-1): Hostname is an IPv4 or IPv6 address.
-         - Legitimate (1): Hostname is a standard domain name.
-      2. url_length:
-         - Legitimate (1): Length < 54 characters.
-         - Suspicious (0): 54 <= Length <= 75 characters.
-         - Phishing (-1): Length > 75 characters.
-      3. shortining_service:
-         - Phishing (-1): Hostname matches a known shortening service.
-         - Legitimate (1): Standard non-shortened domain.
-      4. having_at_symbol:
-         - Phishing (-1): URL contains '@' (disguising actual destination).
-         - Legitimate (1): URL does not contain '@'.
-      5. double_slash_redirecting:
-         - Phishing (-1): '//' appears after index 7 (e.g. in path or query).
-         - Legitimate (1): Standard protocol '//' only.
-      6. prefix_suffix:
-         - Phishing (-1): Hyphen '-' present in domain name.
-         - Legitimate (1): No hyphen in domain name.
-      7. having_sub_domain:
-         - Legitimate (1): 0 subdomains (dots <= 1 after stripping TLD).
-         - Suspicious (0): 1 subdomain.
-         - Phishing (-1): >= 2 subdomains (or IP address).
-      8. sslfinal_state:
-         - Legitimate (1): URL scheme is HTTPS.
-         - Phishing (-1): URL scheme is unencrypted HTTP or missing.
-      9. port:
-         - Phishing (-1): Explicit non-standard port (not 80 or 443).
-         - Legitimate (1): Standard port (80/443) or omitted.
-      10. https_token:
-         - Phishing (-1): Token 'https' is part of domain name body.
-         - Legitimate (1): Token 'https' not present in domain body.
-
-    Args:
-        url: The raw URL string to extract features from.
-
-    Returns:
-        Dict mapping each feature name in FEATURE_ORDER to its integer encoding.
+    Extracts the 30 lexical/structural URL features.
+    
+    Guarantees:
+      - Never performs any network I/O
+      - Never raises exceptions on malformed strings or invalid types
+      - Returns numerical values matching FEATURE_ORDER
     """
-    # Safe default: return all 1s (legitimate) on invalid/empty URL inputs
-    default_features = {feat: 1 for feat in FEATURE_ORDER}
-
     if not url or not isinstance(url, str):
-        return default_features
+        return _safe_default_features()
+
+    clean_url = url.strip()
+    if not clean_url:
+        return _safe_default_features()
 
     try:
-        clean_url = url.strip()
-        parsed = urlparse(clean_url)
+        # Prepend scheme if missing so urlsplit parses host and path reliably
+        parse_target = clean_url
+        if "://" not in clean_url and not re.match(r"^[a-zA-Z]+:", clean_url):
+            parse_target = "http://" + clean_url
+
+        parsed = urlsplit(parse_target)
         hostname = (parsed.hostname or "").lower().strip()
+        path = parsed.path or ""
+        query = parsed.query or ""
+        scheme = parsed.scheme.lower()
+        port = parsed.port
 
-        # 1. having_ip_address
-        has_ip = check_ip_address(hostname)
-        f_ip = -1 if has_ip else 1
-
-        # 2. url_length
         url_len = len(clean_url)
-        if url_len < 54:
-            f_length = 1
-        elif url_len <= 75:
-            f_length = 0
-        else:
-            f_length = -1
+        host_len = len(hostname)
+        path_len = len(path)
+        query_len = len(query)
 
-        # 3. shortining_service
-        f_shortener = -1 if is_url_shortener(clean_url) else 1
+        # Character counts across full URL
+        count_dots = clean_url.count(".")
+        count_hyphens = clean_url.count("-")
+        count_digits = sum(c.isdigit() for c in clean_url)
+        count_underscores = clean_url.count("_")
+        count_slashes = clean_url.count("/")
+        count_at = clean_url.count("@")
+        count_question = clean_url.count("?")
+        count_equal = clean_url.count("=")
+        count_ampersand = clean_url.count("&")
+        count_percent = clean_url.count("%")
 
-        # 4. having_at_symbol
-        f_at = -1 if check_at_symbol(clean_url) else 1
+        # Ratios (normalized by URL length)
+        digit_ratio = round(count_digits / url_len, 4) if url_len > 0 else 0.0
+        letter_count = sum(c.isalpha() for c in clean_url)
+        letter_ratio = round(letter_count / url_len, 4) if url_len > 0 else 0.0
+        special_count = url_len - count_digits - letter_count
+        special_char_ratio = round(special_count / url_len, 4) if url_len > 0 else 0.0
 
-        # 5. double_slash_redirecting
-        # In standard URLs, "//" appears at index 5 (http://) or 6 (https://).
-        # Any occurrence after index 7 or inside the parsed path indicates redirecting.
-        has_redirect_slash = (clean_url.rfind("//") > 7) or check_double_slash_redirect(clean_url)
-        f_double_slash = -1 if has_redirect_slash else 1
+        # Host and structural flags
+        is_ip_host = 1 if _is_ip(hostname) else 0
+        has_at_symbol = 1 if "@" in clean_url else 0
+        is_https = 1 if scheme == "https" else 0
+        num_subdomains = _count_subdomains(hostname)
 
-        # 6. prefix_suffix (hyphen in domain)
-        f_prefix_suffix = -1 if check_prefix_suffix_hyphen(hostname) else 1
+        # Path depth: number of non-empty directory levels in the path
+        path_segments = [s for s in path.split("/") if s]
+        path_depth = len(path_segments)
 
-        # 7. having_sub_domain
-        # Subdomain count: 0 -> 1 (legit), 1 -> 0 (suspicious), >= 2 -> -1 (phishing)
-        if has_ip:
-            f_subdomain = -1
-        else:
-            sub_count = count_subdomains(hostname)
-            if sub_count == 0:
-                f_subdomain = 1
-            elif sub_count == 1:
-                f_subdomain = 0
-            else:
-                f_subdomain = -1
+        # Port indicators
+        has_port = 1 if port is not None else 0
+        non_standard_port = 1 if (port is not None and port not in (80, 443)) else 0
 
-        # 8. sslfinal_state (approximated from scheme)
-        f_ssl = 1 if parsed.scheme.lower() == "https" else -1
+        # Punycode / IDN homograph attack indicator
+        has_punycode = 1 if "xn--" in hostname else 0
 
-        # 9. port
-        has_non_standard_port = False
-        if parsed.port and parsed.port not in (80, 443):
-            has_non_standard_port = True
-        f_port = -1 if has_non_standard_port else 1
+        # Hostname entropy (randomness of domain characters)
+        hostname_entropy = _calculate_entropy(hostname)
 
-        # 10. https_token in domain
-        # Checks if token 'https' is deceptively placed within the domain name
-        # e.g., 'http://https-paypal-verify.com' or 'http://login.https.example.com'
-        f_https_token = -1 if "https" in hostname else 1
+        # Longest token in hostname
+        host_tokens = re.split(r"[\.\-_]", hostname) if hostname else []
+        longest_token_length = max(len(t) for t in host_tokens) if host_tokens else 0
+
+        # Phishing keywords in URL (reusing Stage 2's list)
+        lowered_url = clean_url.lower()
+        suspicious_keyword_count = sum(1 for kw in PHISHING_KEYWORDS if kw in lowered_url)
+
+        # URL shortener service
+        cleaned_host = hostname.rstrip(".")
+        is_known_shortener = 1 if any(
+            cleaned_host == s or cleaned_host.endswith("." + s) for s in SHORTENER_DOMAINS
+        ) else 0
+
+        # Open redirect / double slash pattern inside path
+        has_double_slash_in_path = 1 if "//" in path else 0
 
         return {
-            "having_ip_address": f_ip,
-            "url_length": f_length,
-            "shortining_service": f_shortener,
-            "having_at_symbol": f_at,
-            "double_slash_redirecting": f_double_slash,
-            "prefix_suffix": f_prefix_suffix,
-            "having_sub_domain": f_subdomain,
-            "sslfinal_state": f_ssl,
-            "port": f_port,
-            "https_token": f_https_token,
+            "url_length": url_len,
+            "hostname_length": host_len,
+            "path_length": path_len,
+            "query_length": query_len,
+            "count_dots": count_dots,
+            "count_hyphens": count_hyphens,
+            "count_digits": count_digits,
+            "count_underscores": count_underscores,
+            "count_slashes": count_slashes,
+            "count_at": count_at,
+            "count_question": count_question,
+            "count_equal": count_equal,
+            "count_ampersand": count_ampersand,
+            "count_percent": count_percent,
+            "digit_ratio": digit_ratio,
+            "letter_ratio": letter_ratio,
+            "special_char_ratio": special_char_ratio,
+            "is_ip_host": is_ip_host,
+            "has_at_symbol": has_at_symbol,
+            "is_https": is_https,
+            "num_subdomains": num_subdomains,
+            "path_depth": path_depth,
+            "has_port": has_port,
+            "non_standard_port": non_standard_port,
+            "has_punycode": has_punycode,
+            "hostname_entropy": hostname_entropy,
+            "longest_token_length": longest_token_length,
+            "suspicious_keyword_count": suspicious_keyword_count,
+            "is_known_shortener": is_known_shortener,
+            "has_double_slash_in_path": has_double_slash_in_path,
         }
 
     except Exception:
-        # Guarantee that extraction never raises
-        return default_features
+        # Failsafe default on any unexpected edge case
+        return _safe_default_features()
 
 
-def extract_feature_vector(url: str) -> List[int]:
-    """
-    Extracts features in the exact list order specified by FEATURE_ORDER,
-    suitable for passing to scikit-learn models.
-    """
-    feat_dict = extract_ml_features(url)
-    return [feat_dict[k] for k in FEATURE_ORDER]
+def extract_feature_vector(url: str) -> List[float]:
+    """Extracts features in fixed order as a numeric list for model ingestion."""
+    feats = extract_ml_features(url)
+    return [float(feats[name]) for name in FEATURE_ORDER]
