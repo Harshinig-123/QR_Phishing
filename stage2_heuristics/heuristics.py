@@ -1,430 +1,435 @@
 """
-heuristics.py
--------------
-Member 2 — Stage 2: Heuristic + Shortener Analysis
+Stage 2 - Heuristic + URL-shortener analysis.
 
-Responsibilities:
-    1. Detect known URL shorteners (bit.ly, tinyurl, cutt.ly, etc.).
-    2. Safely resolve shortened URLs using lightweight HTTP HEAD/GET requests.
-    3. Analyze the resolved URL against rule-based heuristic checks
-       (IP address, @ symbol, length, subdomains, prefix/suffix, keywords, etc.).
-    4. Calculate a cumulative risk score and assign a verdict
-       ('legitimate', 'suspicious', or 'phishing').
-    5. Extract structured lexical/structural features that Member 3 (Stage 3 ML)
-       can consume directly for model training and inference.
+Takes a validated URL from Stage 1 (qr_decoder.py), safely expands URL
+shorteners, runs rule-based phishing heuristics and returns a risk score,
+a verdict and a feature dictionary for Stage 3 (ML classification).
+
+Safety design (motivated by Trad & Chehab, "Detecting Quishing Attacks with
+Machine Learning Techniques Through QR Code Analysis", arXiv:2505.03451):
+resolving a QR payload can itself expose the user or the analysis host to a
+malicious site. Therefore:
+
+  * Only hosts on the known-shortener list are ever contacted.
+  * Each hop is requested with HEAD (GET fallback, body never read) and
+    redirects are NOT followed automatically.
+  * As soon as a Location header points to a non-shortener host, resolution
+    stops. The final destination is recorded but never connected to.
+  * Shortener hosts that resolve to private / loopback addresses are refused
+    (SSRF guard), hops are capped and redirect loops are detected.
+
+Public API:
+    analyze_url(url, resolve=True, timeout=5.0, max_hops=5) -> dict
+    resolve_shortener(url, timeout=5.0, max_hops=5) -> (resolved, chain, note)
+    extract_features(url, shortener=None) -> dict
+    to_feature_vector(features) -> list[float]
 """
+from __future__ import annotations
 
 import ipaddress
 import re
-from typing import Dict, List, Optional, Tuple, Any
-from urllib.parse import urlparse
+import socket
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import SplitResult, urljoin, urlsplit
 
-try:
-    import requests
-    HAS_REQUESTS = True
-except ImportError:
-    requests = None
-    HAS_REQUESTS = False
+import requests
 
-
-# --------------------------------------------------------------------------
-# Configuration & Knowledge Bases
-# --------------------------------------------------------------------------
-
-# Curated list of common URL shortening services
-KNOWN_SHORTENERS = {
-    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd",
-    "buff.ly", "adf.ly", "bitly.com", "cutt.ly", "rb.gy", "shorturl.at",
-    "tiny.cc", "lnkd.in", "rebrand.ly", "v.gd", "qr.ae", "clck.ru",
-    "rotf.lol", "t.ly", "bc.vc", "s.id", "bl.ink", "trib.al"
-}
-
-# High-risk keywords commonly found in credential harvesting attacks
-SUSPICIOUS_KEYWORDS = [
-    "login", "signin", "verify", "verification", "secure", "security",
-    "account", "update", "banking", "authenticate", "confirm", "password",
-    "credential", "wallet", "support", "billing", "recover", "validate"
+__all__ = [
+    "analyze_url",
+    "resolve_shortener",
+    "extract_features",
+    "to_feature_vector",
+    "verdict_for_score",
+    "FEATURE_ORDER",
 ]
 
-# TLDs historically associated with high abuse rates in free/cheap domains
-SUSPICIOUS_TLDS = {
-    "tk", "ml", "ga", "cf", "gq", "top", "xyz", "work", "click", "loan", "cam"
-}
+# --------------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------------
+DEFAULT_TIMEOUT = 5.0
+DEFAULT_MAX_HOPS = 5
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+USER_AGENT = "Mozilla/5.0 (compatible; QR-Phishing-Analyzer/1.0; +stage2)"
+
+SHORTENER_DOMAINS = frozenset({
+    "bit.ly", "bitly.com", "j.mp", "tinyurl.com", "tiny.cc", "t.co", "goo.gl",
+    "ow.ly", "is.gd", "v.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at",
+    "rb.gy", "bl.ink", "lnkd.in", "t.ly", "s.id", "soo.gd", "qrco.de", "qr.net",
+    "1url.com", "adf.ly", "shorte.st", "x.co", "snip.ly", "short.io", "clck.ru",
+    "u.to", "trib.al", "dlvr.it", "fb.me", "tr.im", "urlz.fr", "shorturl.com",
+    "mcaf.ee", "po.st", "tny.im", "chilp.it", "bc.vc", "ouo.io", "gg.gg",
+})
+
+SUSPICIOUS_TLDS = frozenset({
+    "tk", "ml", "ga", "cf", "gq", "xyz", "top", "click", "work", "zip", "mov",
+    "loan", "country", "kim", "men", "party", "review", "science", "stream",
+    "download", "racing", "win", "bid", "icu", "cyou", "buzz", "rest",
+    "monster", "su",
+})
+
+PHISHING_KEYWORDS = (
+    "login", "signin", "verify", "account", "banking", "secure", "password",
+    "wallet", "confirm", "webscr", "credential", "authenticate", "suspend",
+    "unlock", "billing",
+)
+
+_SECOND_LEVEL_LABELS = frozenset(
+    {"co", "com", "org", "net", "gov", "edu", "ac", "ne", "or", "go"}
+)
+
+# Verdict thresholds (inclusive lower bounds), see README.
+SUSPICIOUS_THRESHOLD = 25
+PHISHING_THRESHOLD = 55
+
+# Numeric features in a fixed order, for Stage 3 models (XGBoost/LightGBM...).
+FEATURE_ORDER: Tuple[str, ...] = (
+    "url_length", "having_ip_address", "having_at_symbol",
+    "double_slash_redirecting", "prefix_suffix_hyphen", "subdomain_count",
+    "is_https", "https_token_in_domain", "shortening_service",
+    "non_standard_port", "suspicious_tld", "suspicious_keyword_count",
+    "count_dots", "count_hyphens", "count_question", "count_equal",
+    "count_percent",
+)
 
 
 # --------------------------------------------------------------------------
-# Shortener Detection & Resolution
+# URL helpers
 # --------------------------------------------------------------------------
+_NON_HTTP_SCHEME = re.compile(
+    r"^(javascript|data|mailto|tel|sms|file|vbscript):", re.IGNORECASE
+)
 
-def is_url_shortener(url: str) -> bool:
-    """
-    Checks if the URL's hostname belongs to a known URL shortener service.
-    """
+
+def _normalize(url: str) -> str:
+    """Strip whitespace; assume http:// when the scheme is missing."""
+    url = url.strip()
+    if "://" not in url and not _NON_HTTP_SCHEME.match(url):
+        url = "http://" + url
+    return url
+
+
+def _parse_valid(url: str) -> Optional[SplitResult]:
+    """Return the parsed URL if it is a well-formed http(s) URL, else None."""
     try:
-        parsed = urlparse(url)
-        hostname = (parsed.hostname or "").lower().strip()
-        # Direct match or subdomain match (e.g., custom.bit.ly)
-        for shortener in KNOWN_SHORTENERS:
-            if hostname == shortener or hostname.endswith("." + shortener):
-                return True
+        parts = urlsplit(url)
+        _ = parts.port  # raises ValueError on an invalid port
+        host = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return None
+    return parts
+
+
+def _host_of(url: str) -> str:
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _is_shortener_host(host: str) -> bool:
+    host = host.lower().rstrip(".")
+    return any(host == d or host.endswith("." + d) for d in SHORTENER_DOMAINS)
+
+
+def _is_ip_host(host: str) -> bool:
+    """True for IPv4/IPv6 literals and integer/hex/octal obfuscated IPv4."""
+    h = host.strip("[]").lower()
+    if not h:
         return False
-    except Exception:
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        pass
+    if re.fullmatch(r"0x[0-9a-f]+", h) or re.fullmatch(r"\d{8,10}", h):
+        return True
+    return bool(re.fullmatch(r"(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+)){3}", h))
+
+
+def _subdomain_count(host: str) -> int:
+    """Number of subdomain labels, ignoring a leading 'www'."""
+    if not host or _is_ip_host(host):
+        return 0
+    labels = [label for label in host.split(".") if label]
+    if labels and labels[0] == "www":
+        labels = labels[1:]
+    if len(labels) < 2:
+        return 0
+    base = 2
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL_LABELS:
+        base = 3  # e.g. example.co.uk
+    return max(0, len(labels) - base)
+
+
+def verdict_for_score(score: int) -> str:
+    if score >= PHISHING_THRESHOLD:
+        return "phishing"
+    if score >= SUSPICIOUS_THRESHOLD:
+        return "suspicious"
+    return "legitimate"
+
+
+# --------------------------------------------------------------------------
+# Safe shortener resolution
+# --------------------------------------------------------------------------
+def _is_public_host(host: str) -> bool:
+    """SSRF guard: every address the host resolves to must be globally routable."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError):
         return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        except ValueError:
+            return False
+        if not ip.is_global:
+            return False
+    return True
+
+
+def _fetch_redirect(url: str, timeout: float) -> Tuple[int, Optional[str]]:
+    """
+    Request ONE hop without following redirects or reading any body.
+    Returns (status_code, Location header or None).
+    """
+    headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
+    with requests.Session() as session:
+        resp = session.head(url, allow_redirects=False, timeout=timeout, headers=headers)
+        try:
+            if resp.status_code not in REDIRECT_STATUSES:
+                # Some shorteners reject HEAD; retry with GET but never read the body.
+                resp.close()
+                resp = session.get(
+                    url, allow_redirects=False, timeout=timeout,
+                    headers=headers, stream=True,
+                )
+            return resp.status_code, resp.headers.get("Location")
+        finally:
+            resp.close()
 
 
 def resolve_shortener(
     url: str,
-    timeout: float = 4.0,
-    max_redirects: int = 5
+    timeout: float = DEFAULT_TIMEOUT,
+    max_hops: int = DEFAULT_MAX_HOPS,
 ) -> Tuple[str, List[str], Optional[str]]:
     """
-    Safely resolves a shortened URL by following redirects without downloading
-    large or potentially malicious payload bodies.
+    Expand a shortened URL without ever contacting the final destination.
 
-    Returns:
-        (resolved_url, redirect_chain, error_message)
+    Returns (resolved_url, redirect_chain, note). `note` is None on a clean
+    resolution and a short explanation when resolution stopped early.
     """
-    if not is_url_shortener(url):
-        return url, [url], None
+    chain = [url]
+    current = url
+    hops = 0
 
-    if not HAS_REQUESTS:
-        return url, [url], "requests library not installed; skipped HTTP unshortening"
+    while _is_shortener_host(_host_of(current)):
+        if hops >= max_hops:
+            return current, chain, f"Stopped after max redirect hops ({max_hops})"
+        host = _host_of(current)
+        if not _is_public_host(host):
+            return current, chain, f"Refused to contact '{host}': not a public address"
+        try:
+            status, location = _fetch_redirect(current, timeout)
+        except requests.Timeout:
+            return current, chain, f"Timeout while resolving '{host}'"
+        except requests.RequestException as exc:
+            return current, chain, f"Network error while resolving '{host}': {type(exc).__name__}"
+        hops += 1
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-        )
-    }
+        if status not in REDIRECT_STATUSES or not location:
+            return current, chain, f"Shortener returned HTTP {status} without a redirect"
 
-    redirect_chain = [url]
-    current_url = url
+        nxt = urljoin(current, location.strip())
+        if nxt in chain:
+            chain.append(nxt)
+            return nxt, chain, "Redirect loop detected"
+        chain.append(nxt)
+        current = nxt
+        if _parse_valid(nxt) is None:
+            return nxt, chain, "Redirect target is not a valid HTTP(S) URL"
 
-    try:
-        # Use a session with max redirects bound to prevent redirect loops
-        session = requests.Session()
-        session.max_redirects = max_redirects
-
-        # Attempt HEAD request first to avoid downloading body
-        response = session.head(
-            current_url,
-            allow_redirects=True,
-            timeout=timeout,
-            headers=headers
-        )
-
-        # Some servers reject HEAD requests with 405 Method Not Allowed
-        if response.status_code == 405:
-            response = session.get(
-                current_url,
-                allow_redirects=True,
-                stream=True,
-                timeout=timeout,
-                headers=headers
-            )
-            response.close()
-
-        # Collect history of redirects
-        if response.history:
-            redirect_chain = [r.url for r in response.history] + [response.url]
-        else:
-            redirect_chain = [response.url]
-
-        return response.url, redirect_chain, None
-
-    except requests.exceptions.Timeout:
-        return url, redirect_chain, f"Resolution timed out after {timeout}s (link may be offline)"
-    except requests.exceptions.RequestException as e:
-        return url, redirect_chain, f"Resolution network error: {type(e).__name__}"
-    except Exception as e:
-        return url, redirect_chain, f"Unexpected resolution error: {str(e)}"
+    return current, chain, None
 
 
 # --------------------------------------------------------------------------
-# Heuristic Feature Check Functions
+# Feature extraction (UCI Phishing Websites style)
 # --------------------------------------------------------------------------
-
-def check_ip_address(hostname: str) -> bool:
-    """
-    Checks if hostname is an IPv4 or IPv6 address.
-    Phishing attacks frequently use raw IP addresses to bypass domain reputation.
-    """
-    if not hostname:
-        return False
-    # Strip port if present
-    host = hostname.split(":")[0].strip("[]")
-    try:
-        ipaddress.ip_address(host)
-        return True
-    except ValueError:
-        return False
+def _empty_features(length: int = 0) -> Dict[str, Any]:
+    feats: Dict[str, Any] = {name: 0 for name in FEATURE_ORDER}
+    feats["url_length"] = length
+    feats["matched_keywords"] = []
+    return feats
 
 
-def check_at_symbol(url: str) -> bool:
-    """
-    Checks if '@' is present in the URL.
-    In standard URL syntax, everything prior to '@' is treated as userinfo
-    and ignored by the browser, tricking users into visiting an attacker domain.
-    """
-    return "@" in url
+def extract_features(url: str, shortener: Optional[bool] = None) -> Dict[str, Any]:
+    """Extract the Stage 3 feature dictionary from a (resolved) http(s) URL."""
+    parts = _parse_valid(url)
+    if parts is None:
+        raise ValueError(f"Not a valid http(s) URL: {url!r}")
 
-
-def check_double_slash_redirect(url: str) -> bool:
-    """
-    Checks if '//' appears in the URL path, often used for open-redirect tricks.
-    """
-    parsed = urlparse(url)
-    return "//" in parsed.path
-
-
-def check_prefix_suffix_hyphen(hostname: str) -> bool:
-    """
-    Checks if a hyphen '-' is present in the domain name.
-    Phishers commonly register domain names with hyphens to mimic legitimate brands
-    (e.g., paypal-update.com, apple-verify.com).
-    """
-    if not hostname:
-        return False
-    # Strip TLD and check core domain
-    parts = hostname.split(".")
-    domain_body = ".".join(parts[:-1]) if len(parts) > 1 else parts[0]
-    return "-" in domain_body
-
-
-def count_subdomains(hostname: str) -> int:
-    """
-    Counts the number of subdomains in the host.
-    A standard domain like example.com has 0 subdomains (2 parts).
-    www.example.com has 1 subdomain (3 parts).
-    """
-    if not hostname or check_ip_address(hostname):
-        return 0
-    parts = [p for p in hostname.split(".") if p]
-    # Subtract 2 for domain + TLD (simplification for common TLDs)
-    return max(0, len(parts) - 2)
-
-
-def check_suspicious_tld(hostname: str) -> bool:
-    """
-    Checks if the domain uses a high-abuse top-level domain.
-    """
-    if not hostname:
-        return False
-    tld = hostname.split(".")[-1].lower()
-    return tld in SUSPICIOUS_TLDS
-
-
-def extract_matched_keywords(url: str) -> List[str]:
-    """
-    Finds credential harvesting keywords in the domain or path.
-    """
-    url_lower = url.lower()
-    return [kw for kw in SUSPICIOUS_KEYWORDS if kw in url_lower]
-
-
-# --------------------------------------------------------------------------
-# Main Analysis & Feature Extraction Function
-# --------------------------------------------------------------------------
-
-def extract_features(url: str, is_shortener: bool) -> Dict[str, Any]:
-    """
-    Extracts lexical and structural features from the URL.
-    These features serve a dual purpose:
-      1. They feed into the Stage 2 heuristic rule scoring engine.
-      2. They are structured for Member 3 (Stage 3 ML) feature extraction.
-    """
-    parsed = urlparse(url)
-    hostname = (parsed.hostname or "").lower()
-    url_len = len(url)
-
-    has_ip = 1 if check_ip_address(hostname) else 0
-    has_at = 1 if check_at_symbol(url) else 0
-    double_slash = 1 if check_double_slash_redirect(url) else 0
-    prefix_suffix = 1 if check_prefix_suffix_hyphen(hostname) else 0
-    subdomains = count_subdomains(hostname)
-    is_https = 1 if parsed.scheme.lower() == "https" else 0
-    https_in_domain = 1 if "https" in hostname else 0
-    has_suspicious_tld = 1 if check_suspicious_tld(hostname) else 0
-    matched_kw = extract_matched_keywords(url)
-    kw_count = len(matched_kw)
-
-    # Character counts
-    count_dots = url.count(".")
-    count_hyphens = url.count("-")
-    count_question = url.count("?")
-    count_equal = url.count("=")
-    count_percent = url.count("%")
-
-    # Non-standard port check
-    has_port = 0
-    if parsed.port and parsed.port not in (80, 443):
-        has_port = 1
+    host = parts.hostname.lower()
+    port = parts.port
+    lowered = url.lower()
+    matched = [k for k in PHISHING_KEYWORDS if k in lowered]
+    is_short = _is_shortener_host(host) if shortener is None else bool(shortener)
+    tld = host.rsplit(".", 1)[-1] if "." in host and not _is_ip_host(host) else ""
 
     return {
-        "url_length": url_len,
-        "having_ip_address": has_ip,
-        "having_at_symbol": has_at,
-        "double_slash_redirecting": double_slash,
-        "prefix_suffix_hyphen": prefix_suffix,
-        "subdomain_count": subdomains,
-        "is_https": is_https,
-        "https_token_in_domain": https_in_domain,
-        "shortening_service": 1 if is_shortener else 0,
-        "non_standard_port": has_port,
-        "suspicious_tld": has_suspicious_tld,
-        "suspicious_keyword_count": kw_count,
-        "matched_keywords": matched_kw,
-        "count_dots": count_dots,
-        "count_hyphens": count_hyphens,
-        "count_question": count_question,
-        "count_equal": count_equal,
-        "count_percent": count_percent,
+        "url_length": len(url),
+        "having_ip_address": int(_is_ip_host(host)),
+        "having_at_symbol": int("@" in url),
+        "double_slash_redirecting": int(url.rfind("//") > 7),
+        "prefix_suffix_hyphen": int("-" in host),
+        "subdomain_count": _subdomain_count(host),
+        "is_https": int(parts.scheme.lower() == "https"),
+        "https_token_in_domain": int("https" in host),
+        "shortening_service": int(is_short),
+        "non_standard_port": int(port is not None and port not in (80, 443)),
+        "suspicious_tld": int(tld in SUSPICIOUS_TLDS),
+        "suspicious_keyword_count": len(matched),
+        "matched_keywords": matched,
+        "count_dots": url.count("."),
+        "count_hyphens": url.count("-"),
+        "count_question": url.count("?"),
+        "count_equal": url.count("="),
+        "count_percent": url.count("%"),
     }
 
 
-def analyze_url(url: str, resolve_redirects: bool = True) -> Dict[str, Any]:
-    """
-    Main entry point for Stage 2.
+def to_feature_vector(features: Dict[str, Any]) -> List[float]:
+    """Numeric vector in FEATURE_ORDER, ready for an sklearn/XGBoost/LightGBM model."""
+    return [float(features[name]) for name in FEATURE_ORDER]
 
-    Args:
-        url: The validated URL string from Stage 1 (result.url).
-        resolve_redirects: Whether to perform HTTP unshortening on known shorteners.
 
-    Returns:
-        Structured dictionary matching the Stage 2 & 3 integration contract:
-        {
-            "original_url": str,
-            "is_shortener": bool,
-            "resolved_url": str,
-            "redirect_chain": List[str],
-            "features": Dict[str, Any],
-            "triggered_rules": List[str],
-            "score": int (0 - 100),
-            "verdict": "legitimate" | "suspicious" | "phishing",
-            "resolution_note": Optional[str]
-        }
-    """
-    if not url or not isinstance(url, str):
-        return {
-            "original_url": url,
-            "is_shortener": False,
-            "resolved_url": url,
-            "redirect_chain": [],
-            "features": {},
-            "triggered_rules": ["Invalid or empty URL provided"],
-            "score": 0,
-            "verdict": "legitimate",
-            "resolution_note": "No URL provided"
-        }
-
-    url = url.strip()
-    is_short = is_url_shortener(url)
-
-    # 1. Resolve shorteners if requested
-    resolution_note = None
-    if is_short and resolve_redirects:
-        resolved_url, redirect_chain, err = resolve_shortener(url)
-        if err:
-            resolution_note = err
-    else:
-        resolved_url = url
-        redirect_chain = [url]
-
-    # 2. Extract features on the final (resolved) target URL
-    features = extract_features(resolved_url, is_shortener=is_short)
-
-    # 3. Rule Evaluation & Scoring Engine
-    triggered_rules = []
+# --------------------------------------------------------------------------
+# Scoring
+# --------------------------------------------------------------------------
+def _score(features: Dict[str, Any], is_http: bool) -> Tuple[int, List[str]]:
     score = 0
+    rules: List[str] = []
 
-    # Rule: Raw IP Address Host (+35 pts)
-    if features["having_ip_address"] == 1:
-        score += 35
-        triggered_rules.append("Uses raw IP address as hostname instead of a registered domain (+35)")
+    def add(points: int, text: str) -> None:
+        nonlocal score
+        score += points
+        rules.append(f"{text} (+{points})")
 
-    # Rule: @ Symbol Obfuscation (+30 pts)
-    if features["having_at_symbol"] == 1:
-        score += 30
-        triggered_rules.append("Contains '@' symbol used to disguise destination URL (+30)")
+    if features["having_ip_address"]:
+        add(35, "Uses raw IP address as hostname instead of a registered domain")
+    if features["having_at_symbol"]:
+        add(30, "Contains '@' symbol that can hide the real destination")
+    if features["shortening_service"]:
+        add(15, "Uses URL shortening service to conceal the target destination")
 
-    # Rule: URL Shortening (+15 pts)
-    if features["shortening_service"] == 1:
-        score += 15
-        triggered_rules.append("Uses URL shortening service to conceal the target destination (+15)")
+    length = features["url_length"]
+    if length > 75:
+        add(20, f"Excessive URL length ({length} chars)")
+    elif length >= 54:
+        add(10, f"Long URL ({length} chars)")
 
-    # Rule: URL Length (>75 high, 54-75 moderate)
-    if features["url_length"] > 75:
-        score += 20
-        triggered_rules.append(f"Excessive URL length ({features['url_length']} chars > 75) (+20)")
-    elif features["url_length"] >= 54:
-        score += 10
-        triggered_rules.append(f"Moderate URL length ({features['url_length']} chars >= 54) (+10)")
-
-    # Rule: Hyphen in Domain (+15 pts)
-    if features["prefix_suffix_hyphen"] == 1:
-        score += 15
-        triggered_rules.append("Domain contains hyphen '-' (frequent brand impersonation tactic) (+15)")
-
-    # Rule: Subdomain Depth (>= 2 subdomains: +15 pts)
+    if features["prefix_suffix_hyphen"]:
+        add(15, "Domain contains hyphen '-' (frequent brand impersonation tactic)")
     if features["subdomain_count"] >= 2:
-        score += 15
-        triggered_rules.append(f"Deep subdomain nesting ({features['subdomain_count']} subdomains) (+15)")
+        add(15, f"Deep subdomain nesting ({features['subdomain_count']} subdomains)")
+    if is_http:
+        add(10, "Uses unencrypted HTTP connection")
+        if features["https_token_in_domain"]:
+            add(20, "Deceptive 'https' token inside domain name while served over HTTP")
+    if features["double_slash_redirecting"]:
+        add(15, "Contains '//' redirect pattern inside the URL")
+    if features["non_standard_port"]:
+        add(15, "Uses a non-standard port")
+    if features["suspicious_tld"]:
+        add(15, "Uses a high-abuse top-level domain")
 
-    # Rule: Insecure HTTP (+10 pts)
-    if features["is_https"] == 0:
-        score += 10
-        triggered_rules.append("Uses unencrypted HTTP connection (+10)")
+    kw = features["matched_keywords"]
+    if kw:
+        points = min(10 * len(kw), 25)
+        names = ", ".join(f"'{k}'" for k in kw)
+        add(points, f"Contains credential/security keywords: {names}")
 
-    # Rule: HTTPS token in domain (+20 pts)
-    if features["https_token_in_domain"] == 1 and features["is_https"] == 0:
-        score += 20
-        triggered_rules.append("Deceptive 'https' keyword found inside the domain name (+20)")
+    return min(score, 100), rules
 
-    # Rule: Double slash redirect in path (+15 pts)
-    if features["double_slash_redirecting"] == 1:
-        score += 15
-        triggered_rules.append("Double slash '//' redirect pattern found in URL path (+15)")
 
-    # Rule: Non-standard port (+15 pts)
-    if features["non_standard_port"] == 1:
-        score += 15
-        triggered_rules.append("Connects via an unusual non-standard port (+15)")
-
-    # Rule: High-abuse TLD (+15 pts)
-    if features["suspicious_tld"] == 1:
-        score += 15
-        triggered_rules.append("Registered under high-abuse free/low-reputation TLD (+15)")
-
-    # Rule: Phishing keywords (+10 pts each, capped at 25 pts)
-    if features["suspicious_keyword_count"] > 0:
-        kw_pts = min(25, features["suspicious_keyword_count"] * 10)
-        score += kw_pts
-        kws_str = ", ".join(repr(k) for k in features["matched_keywords"])
-        triggered_rules.append(f"Contains credential/security keywords: {kws_str} (+{kw_pts})")
-
-    # Rule: Unresolved shortener warning
-    if resolution_note:
-        triggered_rules.append(f"Shortener notice: {resolution_note}")
-
-    # Clamp score to [0, 100]
-    score = min(100, score)
-
-    # 4. Final Verdict Determination
-    if score >= 55:
-        verdict = "phishing"
-    elif score >= 25:
-        verdict = "suspicious"
-    else:
-        verdict = "legitimate"
-
+# --------------------------------------------------------------------------
+# Main entry point
+# --------------------------------------------------------------------------
+def _malformed_result(url: str) -> Dict[str, Any]:
+    score = 30
     return {
         "original_url": url,
-        "is_shortener": is_short,
-        "resolved_url": resolved_url,
-        "redirect_chain": redirect_chain,
-        "features": features,
-        "triggered_rules": triggered_rules,
+        "is_shortener": False,
+        "resolved_url": url,
+        "redirect_chain": [url],
+        "features": _empty_features(len(url)),
+        "triggered_rules": ["URL is malformed or not a valid HTTP(S) URL (+30)"],
         "score": score,
-        "verdict": verdict,
-        "resolution_note": resolution_note,
+        "verdict": verdict_for_score(score),
+        "resolution_note": None,
+    }
+
+
+def analyze_url(
+    url: str,
+    resolve: bool = True,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_hops: int = DEFAULT_MAX_HOPS,
+) -> Dict[str, Any]:
+    """
+    Analyze a URL from Stage 1 and return the schema documented in README.md.
+
+    Raises TypeError for non-string input and ValueError for empty input.
+    Malformed URLs and network failures never raise; they are reflected in the
+    returned score / `resolution_note`.
+    """
+    if not isinstance(url, str):
+        raise TypeError("url must be a string")
+    if not url.strip():
+        raise ValueError("url must not be empty")
+
+    candidate = _normalize(url)
+    parts = _parse_valid(candidate)
+    if parts is None:
+        return _malformed_result(candidate)
+
+    is_short = _is_shortener_host(parts.hostname.lower())
+    resolved, chain, note = candidate, [candidate], None
+
+    if is_short and resolve:
+        resolved, chain, note = resolve_shortener(candidate, timeout, max_hops)
+    elif is_short:
+        note = "Shortener resolution disabled; only the short link was analysed"
+
+    target = resolved
+    extra_points = 0
+    extra_rules: List[str] = []
+    resolved_parts = _parse_valid(resolved)
+    if resolved_parts is None:
+        # Shortener pointed at something that is not http(s): analyse the short link
+        # itself and penalise the unusable destination.
+        target = candidate
+        resolved_parts = parts
+        extra_points = 30
+        extra_rules.append("Shortener redirects to a non-HTTP(S) destination (+30)")
+
+    features = extract_features(target, shortener=is_short)
+    score, rules = _score(features, is_http=resolved_parts.scheme.lower() == "http")
+    score = min(score + extra_points, 100)
+    rules.extend(extra_rules)
+
+    return {
+        "original_url": candidate,
+        "is_shortener": is_short,
+        "resolved_url": resolved,
+        "redirect_chain": chain,
+        "features": features,
+        "triggered_rules": rules,
+        "score": score,
+        "verdict": verdict_for_score(score),
+        "resolution_note": note,
     }
