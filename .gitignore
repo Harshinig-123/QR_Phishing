@@ -7,6 +7,14 @@ venv/
 *.py[codz]
 *$py.class
 
+# Stage 3 dataset (raw download ignored, models and reports tracked)
+stage3_ml/data/*.csv
+stage3_ml/data/*.arff
+!stage3_ml/models/*.joblib
+!stage3_ml/reports/*.png
+!stage3_ml/reports/*.json
+
+
 # C extensions
 *.so
 

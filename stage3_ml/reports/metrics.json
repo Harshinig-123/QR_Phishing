@@ -1,0 +1,74 @@
+{
+  "dataset": {
+    "source": "UCI Phishing Websites Dataset (ID 327)",
+    "selected_features": [
+      "having_ip_address",
+      "url_length",
+      "shortining_service",
+      "having_at_symbol",
+      "double_slash_redirecting",
+      "prefix_suffix",
+      "having_sub_domain",
+      "sslfinal_state",
+      "port",
+      "https_token"
+    ],
+    "total_samples": 637,
+    "train_samples": 509,
+    "test_samples": 128
+  },
+  "logistic_regression": {
+    "model_name": "Logistic Regression",
+    "accuracy": 0.7422,
+    "precision": 0.7143,
+    "recall": 0.8333,
+    "f1_score": 0.7692,
+    "roc_auc": 0.8038,
+    "confusion_matrix": [
+      [
+        40,
+        22
+      ],
+      [
+        11,
+        55
+      ]
+    ]
+  },
+  "random_forest": {
+    "model_name": "Random Forest",
+    "accuracy": 0.7578,
+    "precision": 0.7536,
+    "recall": 0.7879,
+    "f1_score": 0.7704,
+    "roc_auc": 0.8404,
+    "confusion_matrix": [
+      [
+        45,
+        17
+      ],
+      [
+        14,
+        52
+      ]
+    ]
+  },
+  "random_forest_best_params": {
+    "criterion": "entropy",
+    "max_depth": 8,
+    "min_samples_split": 5,
+    "n_estimators": 80
+  },
+  "feature_importances": {
+    "sslfinal_state": 0.324,
+    "prefix_suffix": 0.2854,
+    "having_sub_domain": 0.0668,
+    "url_length": 0.0614,
+    "double_slash_redirecting": 0.0602,
+    "shortining_service": 0.0466,
+    "https_token": 0.0429,
+    "having_ip_address": 0.0412,
+    "having_at_symbol": 0.0385,
+    "port": 0.033
+  }
+}
