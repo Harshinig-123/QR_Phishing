@@ -1,8 +1,8 @@
-# Member 1 — QR Decoding (Stage 1)
+# Member 1: QR Decoding and Payload Typing (Stage 1)
 
-Decodes an uploaded QR code image, extracts the embedded content, and
-validates that it's a URL before handing it off to Stage 2 (heuristics)
-and Stage 3 (ML classification).
+Decodes a QR image **locally** (no network), identifies what the QR code
+contains, validates URLs, and flags sensitive non-URL payloads before handing
+off to Stage 2 (heuristics) and Stage 3 (ML).
 
 ## Setup
 
@@ -10,86 +10,79 @@ and Stage 3 (ML classification).
 pip install -r requirements.txt
 ```
 
-### Windows: "Could not find module libzbar-64.dll / libiconv.dll"
-
-`pyzbar` is **optional** — the module automatically falls back to OpenCV,
-so after `pip install -r requirements.txt` everything works even if you see
-this error elsewhere. If you still want pyzbar working, install the
-**Microsoft Visual C++ Redistributable 2013 (x64)** (`vcredist_x64.exe`)
-from Microsoft's site, then restart your terminal.
-
-Linux: `sudo apt-get install libzbar0` · macOS: `brew install zbar`
+`pyzbar` is optional. If it fails to load on Windows (`libzbar-64.dll` /
+`libiconv.dll` error), the module falls back to OpenCV automatically.
+To fix pyzbar itself, install the Microsoft Visual C++ 2013 Redistributable
+(x64). Linux: `sudo apt-get install libzbar0`. macOS: `brew install zbar`.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `qr_decoder.py` | Main module — all decoding/validation logic lives here |
-| `generate_test_qr.py` | Creates sample QR images in `test_images/` to test against |
-| `test_decoder.py` | Automated test suite |
-| `demo_cli.py` | Quick manual demo: `python demo_cli.py some_qr.png` |
+| `qr_decoder.py` | Stage 1 module (decode, validate, payload typing) |
+| `pipeline.py` | Chains Stage 1 -> 2 -> 3 (**put in repo root**) |
+| `generate_test_qr.py` | 19 sample QR codes (URLs and non-URL payload types) |
+| `test_decoder.py` | Tests for Stage 1 |
+| `generate_varied_qr.py` | Same 6 URLs in 18 rendering styles (108 images) |
+| `test_rendering_consistency.py` | Decode success per style; checks no URL is decoded wrongly |
+| `test_pipeline.py` | Checks pipeline wiring with fake Stage 2/3 (before integration) |
+| `demo_cli.py` | Stage 1 only demo |
 
 ## Quick start
 
 ```bash
-python generate_test_qr.py   # creates test_images/ with 8 sample QR codes
-python test_decoder.py       # runs the full test suite
-python demo_cli.py test_images/legit_url.png   # try it on one image
+python generate_test_qr.py
+python test_decoder.py
+python generate_varied_qr.py
+python test_rendering_consistency.py            # or: --backend opencv / --backend zbar
+python test_pipeline.py
+python pipeline.py test_images/legit_url.png
 ```
 
-## Integration contract (for Member 2 & Member 3)
-
-Call one of these two functions depending on how the QR image arrives:
+## Integration contract (Members 2 and 3)
 
 ```python
 from qr_decoder import process_qr_image, process_qr_bytes
-
-# If you have a file path (e.g. CLI, or a file already saved to disk)
-result = process_qr_image("uploaded_qr.png")
-
-# If you have raw bytes (e.g. Flask: request.files['qr'].read())
-result = process_qr_bytes(uploaded_file_bytes)
+result = process_qr_image("qr.png")          # or process_qr_bytes(file_bytes)
 ```
 
-Both return a `QRDecodeResult` object:
+| Field | Meaning |
+|---|---|
+| `status` | `"ok"`, `"no_qr"`, `"unreadable"`, `"not_a_url"` |
+| `url` | Validated URL (only when `status == "ok"`) |
+| `payload_type` | `url`, `wifi`, `sms`, `phone`, `email`, `payment_upi`, `payment_crypto`, `app_link`, `script`, `other_scheme_link`, `contact`, `calendar`, `geolocation`, `domain_without_scheme`, `plain_text`, `empty`, `none` |
+| `sensitive` | `True` if the payload deserves a user warning |
+| `sensitivity_note` | Why (WiFi join, payment, SMS/phone, app link, script, ...) |
+| `message`, `raw_data`, `all_detected` | Explanation, decoded text, every payload found |
 
-```python
-result.status      # "ok" | "no_qr" | "unreadable" | "not_a_url"
-result.url         # the validated URL (only set when status == "ok")
-result.raw_data    # whatever was decoded, even if it wasn't a URL
-result.message     # human-readable explanation (good for UI/logs)
-result.all_detected  # list of every payload found, if multiple QR codes present
-```
+Always check `status` before using `url`. Stage 1 only checks that something
+**is** a URL; it never judges risk. IP-based and `@` URLs correctly return
+`ok`; Stage 2/3 decide they are risky.
 
-**Always check `result.status` before using `result.url`.** Example:
+Optional: `process_qr_image(path, assume_scheme="https")` treats a bare domain
+(`www.example.com/login`) as a URL. Off by default.
 
-```python
-result = process_qr_image(path)
+## Pipeline verdicts (`pipeline.py`)
 
-if result.status == "ok":
-    url = result.url
-    # pass `url` into Stage 2: heuristic_check(url), then Stage 3: ml_predict(url)
-else:
-    # don't continue the pipeline — show result.message to the user instead
-    print(f"Could not process this QR code: {result.message}")
-```
+`phishing`, `legitimate`, `caution` (sensitive non-URL payload),
+`not_supported` (non-URL, non-sensitive), `no_qr`, `unreadable`,
+`undetermined` (Stage 2/3 not connected or both failed).
 
-You can also use `if result:` as shorthand for `if result.status == "ok":`.
+Stage 2 must expose `heuristics.analyze_url(url)` and Stage 3
+`ml_predict.predict_url(url)` (see their folder READMEs). Until they exist,
+placeholders are used and clearly labelled.
 
-### Status meanings
+## Measured results (for the report)
 
-| Status | Meaning | What downstream stages should do |
+Decoding the same 6 URLs rendered in 18 styles (clean, hard, degraded):
+
+| Backend | Decoded correctly | Wrong URL decoded |
 |---|---|---|
-| `"ok"` | Valid URL found | Proceed to Stage 2/3 with `result.url` |
-| `"no_qr"` | No QR code detected in the image | Stop; ask user to re-upload a clearer image |
-| `"unreadable"` | File isn't a valid/openable image | Stop; ask user to re-upload |
-| `"not_a_url"` | QR decoded fine, but isn't a URL (e.g. WiFi config, plain text) | Stop; this tool only analyzes URL-based QR codes |
+| auto (pyzbar, then OpenCV) | 108 / 108 | 0 |
+| OpenCV only | 108 / 108 | 0 |
+| pyzbar only | 107 / 108 | 0 |
 
-### Note on scope
-
-Stage 1 only validates that the content **is structurally a URL** (has a
-scheme + domain). It does **not** judge whether the URL looks suspicious —
-that's intentionally left to Stage 2 (heuristics) and Stage 3 (ML), so
-`phishing_style_ip.png` and `phishing_style_at.png` in the test set both
-correctly return `status="ok"` even though they look risky; it's Stage
-2/3's job to flag that, not Stage 1's.
+Re-run on your own machine and report your numbers. Two fixes came from this
+test: an invert-and-retry step for white-on-black codes (0/6 before) and
+multi-scale OpenCV retries (94% before). Results are on synthetic images with
+mild degradation, not real-world photos of printed codes.

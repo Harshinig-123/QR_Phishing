@@ -1,14 +1,12 @@
 """
-demo_cli.py
------------
-Quick command-line demo: point it at any QR code image and see the result.
+demo_cli.py - Stage 1 only demo. Point it at any QR image.
 
-Usage:
-    python demo_cli.py path/to/qr_image.png
+Usage:  python demo_cli.py path/to/qr_image.png
+(For the full pipeline use: python pipeline.py path/to/qr_image.png)
 """
 
-import sys
 import json
+import sys
 
 from qr_decoder import process_qr_image
 
@@ -18,15 +16,16 @@ def main():
         print("Usage: python demo_cli.py <path_to_qr_image>")
         sys.exit(1)
 
-    image_path = sys.argv[1]
-    result = process_qr_image(image_path)
-
+    result = process_qr_image(sys.argv[1])
     print(json.dumps(result.to_dict(), indent=2))
-
+    print()
+    print(f"Payload type: {result.payload_type}")
     if result.status == "ok":
-        print(f"\n✅ Decoded URL ready for Stage 2: {result.url}")
+        print(f"URL ready for Stage 2: {result.url}")
     else:
-        print(f"\n⚠️  Stage 1 did not produce a URL. Reason: {result.message}")
+        print(f"Stage 1 did not produce a URL. {result.message}")
+    if result.sensitive:
+        print(f"WARNING: {result.sensitivity_note}")
 
 
 if __name__ == "__main__":
