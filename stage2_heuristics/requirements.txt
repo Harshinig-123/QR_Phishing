@@ -1,0 +1,5 @@
+requests>=2.31.0
+urllib3>=2.0.0
+# Optional (only used by demo_cli.py --qr as a fallback if Stage 1's decoder
+# can't be imported):
+# opencv-python>=4.8.0
