@@ -49,7 +49,6 @@ class TestFeatureExtractor(unittest.TestCase):
         self.assertEqual(features["is_https"], 0)
         self.assertEqual(features["has_port"], 1)
         self.assertEqual(features["non_standard_port"], 1)
-        self.assertEqual(features["path_depth"], 2)
         self.assertGreaterEqual(features["suspicious_keyword_count"], 1)
 
     def test_at_symbol_url(self):
@@ -64,8 +63,26 @@ class TestFeatureExtractor(unittest.TestCase):
         url = "https://example.com/" + "subpath/" * 15 + "?param=value&token=123456789"
         features = extract_ml_features(url)
         self.assertEqual(features["url_length"], len(url))
-        self.assertGreater(features["path_depth"], 10)
-        self.assertEqual(features["count_ampersand"], 1)
+        self.assertEqual(features["hostname_dots"], 1)
+
+    def test_trailing_slash_normalization(self):
+        """Root URL with trailing slash must evaluate identically to URL without trailing slash."""
+        u1 = "https://www.google.com"
+        u2 = "https://www.google.com/"
+        f1 = extract_ml_features(u1)
+        f2 = extract_ml_features(u2)
+        self.assertEqual(f1, f2)
+        self.assertEqual(extract_feature_vector(u1), extract_feature_vector(u2))
+
+    def test_subdomains_and_benign_paths(self):
+        """URLs with single subdomain (e.g. docs) and deep paths extract safely without issues."""
+        url = "https://docs.python.org/3/library/urllib.parse.html"
+        features = extract_ml_features(url)
+        self.assertEqual(features["is_https"], 1)
+        self.assertEqual(features["hostname_dots"], 2)
+        self.assertEqual(features["num_subdomains"], 1)  # docs is 1 subdomain
+        self.assertEqual(features["is_ip_host"], 0)
+        self.assertEqual(features["has_punycode"], 0)
 
     def test_punycode_url(self):
         """IDN homograph URLs containing 'xn--' must be flagged."""

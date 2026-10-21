@@ -3,7 +3,7 @@ feature_extractor.py
 --------------------
 Stage 3: Purely Lexical/Structural Feature Extraction for URL Phishing Classification.
 
-Calculates 30 static, URL-computable features directly from the raw string.
+Calculates 23 static, URL-computable features directly from the raw string.
 Guarantees 100% static execution:
   - ZERO network calls (no DNS, no WHOIS, no HTTP requests, no sockets)
   - Safe against malformed/empty/non-string inputs (never raises exceptions)
@@ -48,20 +48,30 @@ SECOND_LEVEL_LABELS = frozenset(
     {"co", "com", "org", "net", "gov", "edu", "ac", "ne", "or", "go"}
 )
 
+def normalize_url(url: str) -> str:
+    """
+    Normalizes a URL string statically:
+      - Strips leading/trailing whitespace
+      - Normalizes authority/root URLs by stripping trailing slashes:
+        'https://www.google.com/' -> 'https://www.google.com'
+      - Handles both scheme-prefixed and bare root domains
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    u = url.strip()
+    u = re.sub(r"^([a-zA-Z]+://[^/]+)/+$", r"\1", u)
+    u = re.sub(r"^([^/:]+)/+$", r"\1", u)
+    return u
+
+
 FEATURE_ORDER: List[str] = [
     "url_length",
     "hostname_length",
-    "path_length",
-    "query_length",
-    "count_dots",
-    "count_hyphens",
-    "count_digits",
+    "hostname_dots",
+    "hostname_hyphens",
+    "hostname_digits",
     "count_underscores",
-    "count_slashes",
     "count_at",
-    "count_question",
-    "count_equal",
-    "count_ampersand",
     "count_percent",
     "digit_ratio",
     "letter_ratio",
@@ -70,7 +80,6 @@ FEATURE_ORDER: List[str] = [
     "has_at_symbol",
     "is_https",
     "num_subdomains",
-    "path_depth",
     "has_port",
     "non_standard_port",
     "has_punycode",
@@ -117,7 +126,12 @@ def _calculate_entropy(text: str) -> float:
 
 
 def _count_subdomains(hostname: str) -> int:
-    """Calculates number of subdomain labels, handling ccTLD second level domains."""
+    """
+    Calculates number of subdomain labels, handling ccTLD second level domains.
+    Aligns with Stage 2 heuristic rule: a single subdomain (e.g. docs.python.org,
+    mail.google.com, en.wikipedia.org) is standard legitimate web practice.
+    Only excessive subdomain nesting (>= 2 subdomains) indicates potential spoofing.
+    """
     if not hostname or _is_ip(hostname):
         return 0
     labels = [p for p in hostname.split(".") if p]
@@ -128,7 +142,8 @@ def _count_subdomains(hostname: str) -> int:
     base = 2
     if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in SECOND_LEVEL_LABELS:
         base = 3  # e.g., co.uk, com.au
-    return max(0, len(labels) - base)
+    raw_sub = max(0, len(labels) - base)
+    return raw_sub if raw_sub >= 2 else 0
 
 
 def _safe_default_features() -> Dict[str, Any]:
@@ -139,7 +154,7 @@ def _safe_default_features() -> Dict[str, Any]:
 
 def extract_ml_features(url: str) -> Dict[str, Any]:
     """
-    Extracts the 30 lexical/structural URL features.
+    Extracts the 23 lexical/structural URL features.
     
     Guarantees:
       - Never performs any network I/O
@@ -149,7 +164,7 @@ def extract_ml_features(url: str) -> Dict[str, Any]:
     if not url or not isinstance(url, str):
         return _safe_default_features()
 
-    clean_url = url.strip()
+    clean_url = normalize_url(url)
     if not clean_url:
         return _safe_default_features()
 
@@ -162,32 +177,27 @@ def extract_ml_features(url: str) -> Dict[str, Any]:
         parsed = urlsplit(parse_target)
         hostname = (parsed.hostname or "").lower().strip()
         path = parsed.path or ""
-        query = parsed.query or ""
         scheme = parsed.scheme.lower()
         port = parsed.port
 
         url_len = len(clean_url)
         host_len = len(hostname)
-        path_len = len(path)
-        query_len = len(query)
 
-        # Character counts across full URL
-        count_dots = clean_url.count(".")
-        count_hyphens = clean_url.count("-")
-        count_digits = sum(c.isdigit() for c in clean_url)
+        # Hostname-focused structural metrics (brand spoofing & nesting)
+        hostname_dots = hostname.count(".")
+        hostname_hyphens = hostname.count("-")
+        hostname_digits = sum(c.isdigit() for c in hostname)
+
+        # Character counts and ratios across URL
         count_underscores = clean_url.count("_")
-        count_slashes = clean_url.count("/")
         count_at = clean_url.count("@")
-        count_question = clean_url.count("?")
-        count_equal = clean_url.count("=")
-        count_ampersand = clean_url.count("&")
         count_percent = clean_url.count("%")
 
-        # Ratios (normalized by URL length)
-        digit_ratio = round(count_digits / url_len, 4) if url_len > 0 else 0.0
+        total_digits = sum(c.isdigit() for c in clean_url)
+        digit_ratio = round(total_digits / url_len, 4) if url_len > 0 else 0.0
         letter_count = sum(c.isalpha() for c in clean_url)
         letter_ratio = round(letter_count / url_len, 4) if url_len > 0 else 0.0
-        special_count = url_len - count_digits - letter_count
+        special_count = url_len - total_digits - letter_count
         special_char_ratio = round(special_count / url_len, 4) if url_len > 0 else 0.0
 
         # Host and structural flags
@@ -195,10 +205,6 @@ def extract_ml_features(url: str) -> Dict[str, Any]:
         has_at_symbol = 1 if "@" in clean_url else 0
         is_https = 1 if scheme == "https" else 0
         num_subdomains = _count_subdomains(hostname)
-
-        # Path depth: number of non-empty directory levels in the path
-        path_segments = [s for s in path.split("/") if s]
-        path_depth = len(path_segments)
 
         # Port indicators
         has_port = 1 if port is not None else 0
@@ -214,7 +220,7 @@ def extract_ml_features(url: str) -> Dict[str, Any]:
         host_tokens = re.split(r"[\.\-_]", hostname) if hostname else []
         longest_token_length = max(len(t) for t in host_tokens) if host_tokens else 0
 
-        # Phishing keywords in URL (reusing Stage 2's list)
+        # Phishing keywords in URL (reusing Stage 2's canonical list)
         lowered_url = clean_url.lower()
         suspicious_keyword_count = sum(1 for kw in PHISHING_KEYWORDS if kw in lowered_url)
 
@@ -230,17 +236,11 @@ def extract_ml_features(url: str) -> Dict[str, Any]:
         return {
             "url_length": url_len,
             "hostname_length": host_len,
-            "path_length": path_len,
-            "query_length": query_len,
-            "count_dots": count_dots,
-            "count_hyphens": count_hyphens,
-            "count_digits": count_digits,
+            "hostname_dots": hostname_dots,
+            "hostname_hyphens": hostname_hyphens,
+            "hostname_digits": hostname_digits,
             "count_underscores": count_underscores,
-            "count_slashes": count_slashes,
             "count_at": count_at,
-            "count_question": count_question,
-            "count_equal": count_equal,
-            "count_ampersand": count_ampersand,
             "count_percent": count_percent,
             "digit_ratio": digit_ratio,
             "letter_ratio": letter_ratio,
@@ -249,7 +249,6 @@ def extract_ml_features(url: str) -> Dict[str, Any]:
             "has_at_symbol": has_at_symbol,
             "is_https": is_https,
             "num_subdomains": num_subdomains,
-            "path_depth": path_depth,
             "has_port": has_port,
             "non_standard_port": non_standard_port,
             "has_punycode": has_punycode,

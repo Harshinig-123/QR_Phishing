@@ -21,7 +21,7 @@ Output Schema:
                 "contribution": float
             }
         ],
-        "features": dict                # the extracted 30 static URL features
+        "features": dict                # the extracted 23 static URL features
     }
 
 Rationale for `top_factors` Formulation:
@@ -167,7 +167,7 @@ def predict_url(url: str) -> Dict[str, Any]:
     feature_order = bundle.get("feature_order", FEATURE_ORDER)
     label_mapping = bundle.get("label_mapping", {1: "phishing", 0: "legitimate"})
 
-    # 1. Extract 30 static URL features
+    # 1. Extract 23 static URL features
     features_dict = extract_ml_features(url)
     feature_vector = [float(features_dict[f]) for f in feature_order]
     X_sample = np.array([feature_vector], dtype=float)

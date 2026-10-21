@@ -41,8 +41,8 @@ stage3_ml/
 ├── benchmark_trad_chehab.py      # Optional benchmark for Trad & Chehab (2025) pixel arrays
 ├── demo_stage3.py                # Standalone demonstration runner on sanity URLs
 ├── evaluate_on_testset.py        # Stage 4 evaluation suite & layer coverage analysis
-├── feature_extractor.py          # 30 static URL features, safe fallbacks, zero network I/O
-├── feature_selection.md          # 30-feature specification & excluded data rationale
+├── feature_extractor.py          # 23 static URL features, safe fallbacks, zero network I/O
+├── feature_selection.md          # 23-feature specification, distribution analysis & rationale
 ├── get_dataset.py                # PhiUSIIL (UCI 967) acquisition & verified label mapping
 ├── ml_predict.py                 # Prediction API, local LR explanations, should_run_stage3()
 ├── requirements.txt              # Stage 3 Python dependencies
