@@ -134,7 +134,41 @@ def train_and_evaluate(sample_limit: int = 50000):
         df, _ = train_test_split(df, train_size=sample_limit, stratify=df["label"], random_state=42)
         df = df.reset_index(drop=True)
 
-    print(f"[*] Extracting 30 static URL features for {len(df):,} URLs...")
+    import re
+    # To correct the PhiUSIIL root-domain collection artifact (where 100% of legitimate URLs
+    # are bare root domains starting with www and zero paths/slashes), realistically augment
+    # benign web patterns so the model learns that paths, queries, and subdomains are natural
+    # components of normal web browsing.
+    print("[*] Normalizing URLs and augmenting benign patterns to prevent root-domain shortcut bias...")
+    benign_paths = [
+        "/about", "/contact", "/privacy", "/terms", "/help", "/faq",
+        "/docs/guide", "/3/library/urllib.parse.html", "/wiki/Main_Page",
+        "/search?q=query&lang=en", "/blog/2023/10/announcement",
+        "/questions/11227809/why-is-processing-a-sorted-array-faster",
+        "/torvalds/linux/blob/master/Makefile", "/dp/B08N5WRWNW?ref=nb_sb_ss_1_6",
+        "/index.html", "/products/item-12345.html", "/support/tickets",
+    ]
+    benign_subdomains = ["docs.", "en.", "api.", "blog.", "support.", "help.", "m.", "mail."]
+
+    processed_urls = []
+    for i, (url, label) in enumerate(zip(df["url"], df["label"])):
+        u = str(url).strip()
+        if label == 0:
+            # 50% strip www (apex/naked domains)
+            if i % 2 == 0 and "://www." in u:
+                u = u.replace("://www.", "://", 1)
+            # 40% augment with realistic benign path/query
+            if i % 3 == 0:
+                p = benign_paths[i % len(benign_paths)]
+                u = u.rstrip("/") + p
+            # 25% augment with benign subdomain
+            if i % 4 == 0 and "://www." not in u:
+                sub = benign_subdomains[i % len(benign_subdomains)]
+                u = re.sub(r"://", r"://" + sub, u, count=1)
+        processed_urls.append(u)
+    df["url"] = processed_urls
+
+    print(f"[*] Extracting {len(FEATURE_ORDER)} static URL features for {len(df):,} URLs...")
     X_raw = [extract_feature_vector(u) for u in df["url"]]
     X = np.array(X_raw, dtype=float)
     y = df["label"].values.astype(int)
@@ -179,6 +213,8 @@ def train_and_evaluate(sample_limit: int = 50000):
     from sklearn.model_selection import GroupKFold
     gkf = GroupKFold(n_splits=5)
     train_groups_arr = groups[train_idx]
+    best_score = -1.0
+    best_params = rf_candidates[0]
 
     for params in rf_candidates:
         cv_scores = []

@@ -2,162 +2,155 @@
   "dataset": {
     "dataset": "PhiUSIIL Phishing URL Dataset (UCI ID 967)",
     "split_method": "GroupShuffleSplit (by domain)",
-    "train_samples": 39679,
-    "test_samples": 10321,
+    "train_samples": 40174,
+    "test_samples": 9826,
     "random_state": 42
   },
   "logistic_regression": {
     "model_name": "Logistic Regression",
-    "accuracy": 0.9971,
-    "precision": 1.0,
-    "recall": 0.9934,
-    "f1_score": 0.9967,
-    "roc_auc": 0.9983,
+    "accuracy": 0.9217,
+    "precision": 0.9524,
+    "recall": 0.854,
+    "f1_score": 0.9005,
+    "roc_auc": 0.9612,
     "confusion_matrix": [
       [
-        5787,
-        0
+        5576,
+        174
       ],
       [
-        30,
-        4504
+        595,
+        3481
       ]
     ]
   },
   "random_forest": {
     "model_name": "Random Forest",
-    "accuracy": 0.9974,
-    "precision": 1.0,
-    "recall": 0.994,
-    "f1_score": 0.997,
-    "roc_auc": 0.998,
+    "accuracy": 0.9457,
+    "precision": 0.9753,
+    "recall": 0.8916,
+    "f1_score": 0.9316,
+    "roc_auc": 0.9787,
     "confusion_matrix": [
       [
-        5787,
-        0
+        5658,
+        92
       ],
       [
-        27,
-        4507
+        442,
+        3634
       ]
     ]
   },
   "no_https_ablation": {
     "model_name": "Random Forest (No-HTTPS Ablation)",
-    "accuracy": 0.9576,
-    "precision": 0.9883,
-    "recall": 0.9142,
-    "f1_score": 0.9498,
-    "roc_auc": 0.9948,
+    "accuracy": 0.8915,
+    "precision": 0.9487,
+    "recall": 0.7807,
+    "f1_score": 0.8565,
+    "roc_auc": 0.9536,
     "confusion_matrix": [
       [
-        5738,
-        49
+        5578,
+        172
       ],
       [
-        389,
-        4145
+        894,
+        3182
       ]
     ]
   },
   "feature_importances": {
-    "is_https": 0.4042,
-    "count_slashes": 0.1446,
-    "path_length": 0.1352,
-    "num_subdomains": 0.0584,
-    "count_digits": 0.0515,
-    "digit_ratio": 0.0472,
-    "url_length": 0.0416,
-    "hostname_length": 0.0211,
-    "hostname_entropy": 0.0192,
-    "letter_ratio": 0.0179,
-    "path_depth": 0.0174,
-    "count_dots": 0.0156,
-    "special_char_ratio": 0.0086,
-    "count_hyphens": 0.0075,
-    "longest_token_length": 0.007,
-    "suspicious_keyword_count": 0.0014,
-    "count_question": 0.0008,
-    "has_at_symbol": 0.0002,
-    "count_ampersand": 0.0001,
-    "is_known_shortener": 0.0001,
-    "count_underscores": 0.0001,
-    "query_length": 0.0001,
-    "has_punycode": 0.0001,
-    "count_at": 0.0,
-    "count_equal": 0.0,
-    "count_percent": 0.0,
+    "is_https": 0.4384,
+    "hostname_digits": 0.0973,
+    "digit_ratio": 0.0816,
+    "hostname_length": 0.06,
+    "special_char_ratio": 0.0544,
+    "hostname_entropy": 0.0539,
+    "url_length": 0.0456,
+    "letter_ratio": 0.0436,
+    "hostname_hyphens": 0.0388,
+    "longest_token_length": 0.0248,
+    "suspicious_keyword_count": 0.0206,
+    "num_subdomains": 0.0125,
+    "hostname_dots": 0.0091,
+    "count_underscores": 0.0061,
+    "is_known_shortener": 0.0041,
+    "has_at_symbol": 0.0041,
+    "count_at": 0.004,
+    "count_percent": 0.0007,
+    "has_double_slash_in_path": 0.0003,
     "is_ip_host": 0.0,
-    "has_port": 0.0,
+    "has_punycode": 0.0,
     "non_standard_port": 0.0,
-    "has_double_slash_in_path": 0.0
+    "has_port": 0.0
   },
   "top_lr_positive_coefficients": [
     [
-      "count_slashes",
-      9.33
+      "hostname_digits",
+      3.0061
     ],
     [
-      "num_subdomains",
-      4.6734
-    ],
-    [
-      "path_depth",
-      3.7337
-    ],
-    [
-      "count_hyphens",
-      1.6693
+      "hostname_length",
+      2.2397
     ],
     [
       "count_percent",
-      1.5704
+      1.5662
     ],
     [
       "url_length",
-      1.4682
+      0.969
     ],
     [
-      "path_length",
-      1.4173
+      "suspicious_keyword_count",
+      0.9264
     ],
     [
-      "count_underscores",
-      1.2284
+      "num_subdomains",
+      0.7165
+    ],
+    [
+      "is_known_shortener",
+      0.6033
+    ],
+    [
+      "has_at_symbol",
+      0.5044
     ]
   ],
   "top_lr_negative_coefficients": [
     [
       "is_https",
-      -6.6538
-    ],
-    [
-      "count_dots",
-      -5.5243
-    ],
-    [
-      "special_char_ratio",
-      -1.0897
+      -4.759
     ],
     [
       "longest_token_length",
-      -0.7548
+      -1.8825
+    ],
+    [
+      "hostname_dots",
+      -1.1881
+    ],
+    [
+      "special_char_ratio",
+      -0.6833
+    ],
+    [
+      "count_underscores",
+      -0.1335
+    ],
+    [
+      "hostname_entropy",
+      -0.1296
     ],
     [
       "letter_ratio",
-      -0.3396
+      -0.0065
     ],
     [
       "is_ip_host",
-      -0.1777
-    ],
-    [
-      "hostname_length",
-      -0.1618
-    ],
-    [
-      "has_double_slash_in_path",
-      -0.1186
+      -0.0034
     ]
   ]
 }
