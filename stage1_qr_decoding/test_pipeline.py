@@ -70,6 +70,14 @@ def test_stage_crash_is_contained():
     check("Stage 2 crash does not kill pipeline", r["final_verdict"], "legitimate")  # Stage 3 still votes
 
 
+def test_ml_only_flag_is_suspicious():
+    original = pipeline._predict_url
+    pipeline._predict_url = lambda url: {"prediction": "phishing", "probability": 1.0}
+    r = pipeline.run_pipeline(f"{D}/legit_url.png")      # fake Stage 2 says legitimate
+    pipeline._predict_url = original
+    check("ML-only phishing flag -> suspicious", r["final_verdict"], "suspicious")
+
+
 def test_placeholders_when_stages_missing():
     saved = (pipeline.STAGE2_READY, pipeline.STAGE3_READY)
     pipeline.STAGE2_READY = pipeline.STAGE3_READY = False
@@ -82,5 +90,6 @@ if __name__ == "__main__":
     test_wiring_with_fake_stages()
     test_bytes_input()
     test_stage_crash_is_contained()
+    test_ml_only_flag_is_suspicious()
     test_placeholders_when_stages_missing()
     print("\nAll pipeline tests passed.")

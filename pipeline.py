@@ -114,10 +114,20 @@ def run_pipeline(source, from_bytes=False, assume_scheme=None):
     out["stage3"] = _run_stage(_predict_url, STAGE3_READY, "Stage 3", url_for_ml)
 
     # ---- Combine ----
-    votes = [v for v in (_stage_vote(out["stage2"]), _stage_vote(out["stage3"])) if v]
-    if "phishing" in votes:
+    # Stage 2 (explainable rules) is the primary signal. Stage 3 (ML) is secondary:
+    # if ONLY the ML layer objects, the result is "suspicious", not "phishing".
+    v2, v3 = _stage_vote(out["stage2"]), _stage_vote(out["stage3"])
+    if v2 == "phishing":
         out["final_verdict"] = "phishing"
-    elif votes:
+        if v3 == "phishing":
+            out["reasons"].append("Both heuristic and ML layers flag this URL.")
+    elif v3 == "phishing":
+        out["final_verdict"] = "suspicious"
+        out["reasons"].append(
+            "ML layer flags this URL as phishing"
+            + (", but the heuristic layer found no strong red flags." if v2 == "legitimate"
+               else " (heuristic layer unavailable)."))
+    elif v2 or v3:
         out["final_verdict"] = "legitimate"
     else:
         out["final_verdict"] = "undetermined"
