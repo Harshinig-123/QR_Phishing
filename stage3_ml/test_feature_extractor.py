@@ -80,9 +80,17 @@ class TestFeatureExtractor(unittest.TestCase):
         features = extract_ml_features(url)
         self.assertEqual(features["is_https"], 1)
         self.assertEqual(features["hostname_dots"], 2)
-        self.assertEqual(features["num_subdomains"], 1)  # docs is 1 subdomain
+        # In feature_extractor, single subdomains (docs.python.org, mail.google.com) are recognized as
+        # standard web practice (num_subdomains = 0), matching Stage 2 heuristic rule (excessive >= 2).
+        self.assertEqual(features["num_subdomains"], 0)
         self.assertEqual(features["is_ip_host"], 0)
         self.assertEqual(features["has_punycode"], 0)
+
+    def test_excessive_subdomains_flagged(self):
+        """Excessive subdomain nesting (>= 2 subdomains) must be flagged in num_subdomains."""
+        url = "https://login.verify.paypal.com.evil-portal.net/signin"
+        features = extract_ml_features(url)
+        self.assertGreaterEqual(features["num_subdomains"], 2)
 
     def test_punycode_url(self):
         """IDN homograph URLs containing 'xn--' must be flagged."""

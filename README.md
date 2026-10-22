@@ -1,4 +1,4 @@
-﻿# Quishing Shield: Multi-Stage QR Phishing Detection Framework
+# Quishing Shield: Multi-Stage QR Phishing Detection Framework
 
 A defense-in-depth cybersecurity framework developed for detecting and analyzing **Quishing (QR Code Phishing)** attacks. The system combines local computer-vision QR decoding, deterministic security heuristics with safe shortener resolution, and static machine learning classification to evaluate QR payloads without exposing users or systems to exploit delivery.
 
@@ -59,59 +59,61 @@ flowchart TD
 
 ```
 QR_Phishing/
-â”œâ”€â”€ README.md                      # Primary project documentation (this file)
-â”œâ”€â”€ pipeline.py                    # Production end-to-end orchestration pipeline
-â”œâ”€â”€ pipeline_teammate.py           # Teammate alternative pipeline implementation (contains known issues)
-â”œâ”€â”€ run_all_samples.py             # Batch evaluation runner for test images
-â”œâ”€â”€ evaluate_pipeline.py           # Evaluation runner across 32 synthetic test cases
-â”œâ”€â”€ app.py                         # Local standalone Flask web interface
-â”œâ”€â”€ live_demo.py                   # Interactive CLI demo runner (generates QR & analyzes)
-â”œâ”€â”€ requirements.txt               # Unified project dependencies referencing all stages + flask
-â”œâ”€â”€ eval_output.txt                # Cached console benchmark output from evaluate_pipeline.py
-â”œâ”€â”€ eval_results.csv               # Row-by-row prediction and metric export
-â”œâ”€â”€ eval_set/                      # 32 benchmark QR images and manifest.csv
-â”‚   â””â”€â”€ manifest.csv
-â”œâ”€â”€ docs/
-â”‚   â”œâ”€â”€ WALKTHROUGH.md             # Detailed step-by-step pipeline walkthrough & worked example
-â”‚   â””â”€â”€ ISSUES_FOUND.md            # Comprehensive audit of bugs, discrepancies & safety findings
-â”œâ”€â”€ stage1_qr_decoding/            # Member 1: Computer Vision & Payload Typing
-â”‚   â”œâ”€â”€ qr_decoder.py              # Dual OpenCV/pyzbar decoder, inversion & payload classifier
-â”‚   â”œâ”€â”€ demo_cli.py                # Standalone Stage 1 CLI demonstration
-â”‚   â”œâ”€â”€ generate_test_qr.py        # Generates 19 sample QR codes (URL and non-URL payloads)
-â”‚   â”œâ”€â”€ generate_varied_qr.py      # Generates 108 visual variants across 18 rendering styles
-â”‚   â”œâ”€â”€ test_decoder.py            # Unit tests for Stage 1 decoders & payload classification
-â”‚   â”œâ”€â”€ test_rendering_consistency.py # Tests decoding invariance across 108 variants
-â”‚   â”œâ”€â”€ test_pipeline.py           # Pipeline wiring unit tests using mock stages
-â”‚   â”œâ”€â”€ requirements.txt           # Stage 1 dependencies
-â”‚   â”œâ”€â”€ test_images/               # 19 standard test images
-â”‚   â””â”€â”€ test_images_varied/        # 108 varied rendering test images
-â”œâ”€â”€ stage2_heuristics/             # Member 2: Heuristic Analysis & Shortener Resolution
-â”‚   â”œâ”€â”€ heuristics.py              # 12-rule heuristic engine & SSRF-safe shortener resolution
-â”‚   â”œâ”€â”€ demo_cli.py                # Standalone Stage 2 CLI demonstration
-â”‚   â”œâ”€â”€ test_heuristics.py         # 36 unit tests for heuristics, boundaries & SSRF safety
-â”‚   â””â”€â”€ requirements.txt           # Stage 2 dependencies
-â””â”€â”€ stage3_ml/                     # Member 3: Machine Learning & Feature Explanation
-    â”œâ”€â”€ feature_extractor.py       # 23 purely static lexical/structural URL features (0 network)
-    â”œâ”€â”€ ml_predict.py              # Random Forest prediction & Logistic Regression explanations
-    â”œâ”€â”€ train_model.py             # Grouped domain split, 5-fold CV, and ablation training script
-    â”œâ”€â”€ demo_stage3.py             # Stage 3 demonstration across 31 curated sanity URLs
-    â”œâ”€â”€ test_feature_extractor.py  # Unit tests for feature extractor and socket-blocking verification
-    â”œâ”€â”€ test_render_consistency.py # Verifies ML invariance across QR visual rendering styles
-    â”œâ”€â”€ evaluate_on_testset.py     # Stage 4 testset evaluation runner
-    â”œâ”€â”€ benchmark_trad_chehab.py   # Optional benchmark for pixel-array datasets
-    â”œâ”€â”€ feature_selection.md       # Rationale for 23 features and exclusion of DOM/DNS/WHOIS
-    â”œâ”€â”€ requirements.txt           # Stage 3 dependencies
-    â”œâ”€â”€ data/
-    â”‚   â”œâ”€â”€ sanity_urls.csv        # 31 curated test URLs
-    â”‚   â”œâ”€â”€ qr_testset_manifest.csv# Manifest with testset visual variations
-    â”‚   â””â”€â”€ testset_images/        # Pre-generated QR testset images
-    â”œâ”€â”€ models/
-    â”‚   â””â”€â”€ phishing_model.joblib  # Serialized model bundle (RF, LR + scaler, metadata)
-    â””â”€â”€ reports/
-        â”œâ”€â”€ metrics.json           # Quantitative model metrics export
-        â”œâ”€â”€ confusion_matrix.png   # Comparative confusion matrices (LR vs RF)
-        â”œâ”€â”€ roc_curve.png          # ROC curves (LR, RF, and No-HTTPS ablation)
-        â””â”€â”€ feature_importance.png # Top 15 Random Forest Gini feature importances
+├── README.md                      # Primary project documentation (this file)
+├── pipeline.py                    # Production end-to-end orchestration pipeline
+├── pipeline_teammate.py           # Teammate alternative pipeline implementation (contains known issues)
+├── run_all_samples.py             # Batch evaluation runner for test images
+├── evaluate_pipeline.py           # Evaluation runner across 32 synthetic test cases
+├── app.py                         # Local standalone Flask web interface
+├── live_demo.py                   # Interactive CLI demo runner (generates QR & analyzes)
+├── requirements.txt               # Unified project dependencies referencing all stages + flask
+├── eval_output.txt                # Cached console benchmark output from evaluate_pipeline.py
+├── eval_results.csv               # Row-by-row prediction and metric export
+├── eval_set/                      # 32 benchmark QR images and manifest.csv
+│   └── manifest.csv
+├── docs/
+│   ├── WALKTHROUGH.md             # Detailed step-by-step pipeline walkthrough & worked example
+│   └── ISSUES_FOUND.md            # Comprehensive audit of bugs, discrepancies & safety findings
+├── stage1_qr_decoding/            # Member 1: Computer Vision & Payload Typing
+│   ├── qr_decoder.py              # Dual OpenCV/pyzbar decoder, inversion & payload classifier
+│   ├── demo_cli.py                # Standalone Stage 1 CLI demonstration
+│   ├── generate_test_qr.py        # Generates 19 sample QR codes (URL and non-URL payloads)
+│   ├── generate_varied_qr.py      # Generates 108 visual variants across 18 rendering styles
+│   ├── test_decoder.py            # Unit tests for Stage 1 decoders & payload classification
+│   ├── test_rendering_consistency.py # Tests decoding invariance across 108 variants
+│   ├── test_pipeline.py           # Pipeline wiring unit tests using mock stages
+│   ├── requirements.txt           # Stage 1 dependencies
+│   ├── test_images/               # 19 standard test images
+│   └── test_images_varied/        # 108 varied rendering test images
+├── stage2_heuristics/             # Member 2: Heuristic Analysis & Shortener Resolution
+│   ├── heuristics.py              # 12-rule heuristic engine & SSRF-safe shortener resolution
+│   ├── demo_cli.py                # Standalone Stage 2 CLI demonstration
+│   ├── test_heuristics.py         # 36 unit tests for heuristics, boundaries & SSRF safety
+│   └── requirements.txt           # Stage 2 dependencies
+└── stage3_ml/                     # Member 3: Machine Learning & Feature Explanation
+    ├── feature_extractor.py       # 23 purely static lexical/structural URL features (0 network)
+    ├── ml_predict.py              # Random Forest prediction & Logistic Regression explanations
+    ├── train_model.py             # Grouped domain split, 5-fold CV, and ablation training script
+    ├── get_dataset.py             # PhiUSIIL acquisition and clean CSV generator
+    ├── demo_stage3.py             # Stage 3 demonstration across 31 curated sanity URLs
+    ├── test_feature_extractor.py  # Unit tests for feature extractor and socket-blocking verification
+    ├── test_render_consistency.py # Verifies ML invariance across QR visual rendering styles
+    ├── evaluate_on_testset.py     # Stage 4 testset evaluation runner
+    ├── benchmark_trad_chehab.py   # Optional benchmark for pixel-array datasets
+    ├── feature_selection.md       # Rationale for 23 features and exclusion of DOM/DNS/WHOIS
+    ├── requirements.txt           # Stage 3 dependencies (pinned scikit-learn==1.7.2)
+    ├── data/
+    │   ├── urls_labeled.csv       # Clean labeled dataset (regenerate via python stage3_ml/get_dataset.py)
+    │   ├── sanity_urls.csv        # 31 curated test URLs
+    │   ├── qr_testset_manifest.csv# Manifest with testset visual variations
+    │   └── testset_images/        # Pre-generated QR testset images
+    ├── models/
+    │   └── phishing_model.joblib  # Serialized model bundle (RF, LR + scaler, metadata)
+    └── reports/
+        ├── metrics.json           # Quantitative model metrics export
+        ├── confusion_matrix.png   # Comparative confusion matrices (LR vs RF)
+        ├── roc_curve.png          # ROC curves (LR, RF, and No-HTTPS ablation)
+        └── feature_importance.png # Top 15 Random Forest Gini feature importances
 ```
 
 ---
@@ -217,6 +219,18 @@ python app.py
 
 Open http://127.0.0.1:5000 in your browser. The interface supports URL input and QR-image uploads for pipeline analysis. It is intended for local testing and does not require opening the analyzed URLs.
 
+### 5.5 Dataset Acquisition & Model Retraining (Stage 3)
+* **Regenerate Clean Labeled URL Dataset (`urls_labeled.csv`):**
+  Downloads the PhiUSIIL Phishing URL Dataset (UCI ID 967) directly from the UCI Machine Learning Repository, strips all 54 content/DOM/DNS columns to guarantee 100% static URL classification, maps labels (`1` = Phishing target, `0` = Legitimate), removes duplicate/conflicting records, and writes `stage3_ml/data/urls_labeled.csv`:
+  ```powershell
+  python stage3_ml/get_dataset.py
+  ```
+* **Retrain Models & Generate Report Artifacts:**
+  Extracts 23 static lexical/structural URL features, performs domain-grouped train/test splitting (`GroupShuffleSplit`, 0 domain leakage), tunes Random Forest hyperparameters (5-fold CV), trains the standardized Logistic Regression baseline, runs the No-HTTPS ablation study, and saves `stage3_ml/models/phishing_model.joblib`:
+  ```powershell
+  python stage3_ml/train_model.py
+  ```
+
 ---
 
 ## 6. Pipeline Verdict Logic
@@ -232,10 +246,10 @@ The decision fusion in [pipeline.py](pipeline.py#L74-L140) combines verdicts acr
 | `ok` (valid URL) | `phishing` (score $\ge 55$) | `phishing` | **`phishing`** | Both heuristic and ML layers agree on attack indicators. |
 | `ok` (valid URL) | `phishing` (score $\ge 55$) | `legitimate` | **`phishing`** | Heuristic rules triggered strong red flags (e.g., raw IP, `@` symbol). |
 | `ok` (valid URL) | `phishing` (score $\ge 55$) | *Error / Missing* | **`phishing`** | Heuristic rules triggered strong red flags. |
-| `ok` (valid URL) | `suspicious` (score 25â€“54) | `phishing` | **`suspicious`** | Heuristic red flags present, corroborated by ML. |
+| `ok` (valid URL) | `suspicious` (score 25–54) | `phishing` | **`suspicious`** | Heuristic red flags present, corroborated by ML. |
 | `ok` (valid URL) | `legitimate` (score < 25) | `phishing` | **`suspicious`** | ML flags phishing, but heuristics found no strong structural red flags. |
 | `ok` (valid URL) | *Error / Missing* | `phishing` | **`suspicious`** | ML flags phishing; heuristics unavailable. |
-| `ok` (valid URL) | `suspicious` (score 25â€“54) | `legitimate` | **`legitimate`** | Low-level heuristic flags overridden by legitimate ML classification. |
+| `ok` (valid URL) | `suspicious` (score 25–54) | `legitimate` | **`legitimate`** | Low-level heuristic flags overridden by legitimate ML classification. |
 | `ok` (valid URL) | `legitimate` (score < 25) | `legitimate` | **`legitimate`** | Both heuristic and ML models clear the URL. |
 | `ok` (valid URL) | `legitimate` (score < 25) | *Error / Missing* | **`legitimate`** | Cleared by heuristics; ML unavailable. |
 | `ok` (valid URL) | *Missing / Inconclusive* | *Missing / Inconclusive* | **`undetermined`** | Neither Stage 2 nor Stage 3 produced an actionable verdict. |
@@ -252,7 +266,7 @@ The decision fusion in [pipeline.py](pipeline.py#L74-L140) combines verdicts acr
 Evaluated across 6 distinct URLs rendered in 18 variations (clean, hard, degraded):
 * **Clean Renderings (Base, EC L/Q/H, Box Sizes, Versions):** 60 / 60 (100%)
 * **Hard Renderings (Color inversion, Navy/Cream, Green/White, No border):** 12 / 12 (100%)
-* **Degraded Renderings (JPEG Q30, Gaussian blur, 20Â° rotation, 120px scale, Low contrast):** 36 / 36 (100%)
+* **Degraded Renderings (JPEG Q30, Gaussian blur, 20° rotation, 120px scale, Low contrast):** 36 / 36 (100%)
 * **Total Accuracy:** **108 / 108 (100%)**
 * **Decoding Errors (Wrong URL Decoded):** **0**
 
@@ -301,6 +315,6 @@ Evaluated across 32 QR codes (16 legitimate, 16 phishing):
 
 ## 9. Team Roles & Responsibilities
 
-* **Member 1 (Stage 1 â€” QR Decoding & Payload Typing):** Implemented [stage1_qr_decoding/qr_decoder.py](stage1_qr_decoding/qr_decoder.py), image loading, dual OpenCV/pyzbar recovery, color inversion retries, payload typing, sensitive non-URL warnings, and pipeline orchestration ([pipeline.py](pipeline.py)).
-* **Member 2 (Stage 2 â€” Heuristic Engine & Safe Shortener Resolution):** Implemented [stage2_heuristics/heuristics.py](stage2_heuristics/heuristics.py), 12 heuristic risk rules, SSRF-safe HTTP HEAD/GET resolution with loop/hop caps, and destination connection refusal.
-* **Member 3 (Stage 3 â€” ML Classification & Explainability):** Implemented [stage3_ml/feature_extractor.py](stage3_ml/feature_extractor.py), 23 static URL features, [stage3_ml/train_model.py](stage3_ml/train_model.py), Random Forest and Logistic Regression model training with domain-grouped splits, and local linear factor attribution in [stage3_ml/ml_predict.py](stage3_ml/ml_predict.py).
+* **Member 1 (Stage 1 — QR Decoding & Payload Typing):** Implemented [stage1_qr_decoding/qr_decoder.py](stage1_qr_decoding/qr_decoder.py), image loading, dual OpenCV/pyzbar recovery, color inversion retries, payload typing, sensitive non-URL warnings, and pipeline orchestration ([pipeline.py](pipeline.py)).
+* **Member 2 (Stage 2 — Heuristic Engine & Safe Shortener Resolution):** Implemented [stage2_heuristics/heuristics.py](stage2_heuristics/heuristics.py), 12 heuristic risk rules, SSRF-safe HTTP HEAD/GET resolution with loop/hop caps, and destination connection refusal.
+* **Member 3 (Stage 3 — ML Classification & Explainability):** Implemented [stage3_ml/feature_extractor.py](stage3_ml/feature_extractor.py), 23 static URL features, [stage3_ml/train_model.py](stage3_ml/train_model.py), Random Forest and Logistic Regression model training with domain-grouped splits, and local linear factor attribution in [stage3_ml/ml_predict.py](stage3_ml/ml_predict.py).

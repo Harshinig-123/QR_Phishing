@@ -37,23 +37,50 @@ for _sub in ("", "stage1_qr_decoding", "stage2_heuristics", "stage3_ml"):
     if os.path.isdir(_path) and _path not in sys.path:
         sys.path.insert(0, _path)
 
-from qr_decoder import process_qr_bytes, process_qr_image  # noqa: E402
+try:
+    from stage1_qr_decoding.qr_decoder import process_qr_bytes, process_qr_image, QRDecodeResult  # noqa: E402
+except ImportError:
+    from qr_decoder import process_qr_bytes, process_qr_image, QRDecodeResult  # noqa: E402
 
 
-def _try_import(module_name, func_name):
+def _try_import(module_candidates, func_name):
     """Return (function, True) if the teammate's module exists, else (None, False).
+    Supports checking package path (stageX_...) before flat module.
     Real bugs inside their module are NOT hidden: only 'module not found' is."""
-    try:
-        module = importlib.import_module(module_name)
-        return getattr(module, func_name), True
-    except ModuleNotFoundError as e:
-        if e.name == module_name:
-            return None, False
-        raise
+    if isinstance(module_candidates, str):
+        module_candidates = [module_candidates]
+    for module_name in module_candidates:
+        try:
+            module = importlib.import_module(module_name)
+            return getattr(module, func_name), True
+        except ModuleNotFoundError as e:
+            if e.name == module_name or ("." in module_name and e.name == module_name.split(".")[0]):
+                continue
+            raise
+    return None, False
 
 
-_analyze_url, STAGE2_READY = _try_import("heuristics", "analyze_url")
-_predict_url, STAGE3_READY = _try_import("ml_predict", "predict_url")
+# Direct data and analysis imports from Stage 2 and Stage 3 with dynamic fallback
+try:
+    from stage2_heuristics.heuristics import (
+        analyze_url as _analyze_url,
+        SHORTENER_DOMAINS,
+        SUSPICIOUS_TLDS,
+        PHISHING_KEYWORDS,
+    )
+    STAGE2_READY = True
+except ImportError:
+    _analyze_url, STAGE2_READY = _try_import(["stage2_heuristics.heuristics", "heuristics"], "analyze_url")
+    SHORTENER_DOMAINS = frozenset()
+    SUSPICIOUS_TLDS = frozenset()
+    PHISHING_KEYWORDS = ()
+
+try:
+    from stage3_ml.ml_predict import predict_url as _predict_url, should_run_stage3
+    STAGE3_READY = True
+except ImportError:
+    _predict_url, STAGE3_READY = _try_import(["stage3_ml.ml_predict", "ml_predict"], "predict_url")
+    should_run_stage3 = None
 
 
 def _placeholder(stage):
@@ -186,9 +213,16 @@ def summarize(result):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python pipeline.py <path_to_qr_image>")
-        sys.exit(1)
-    res = run_pipeline(sys.argv[1])
+        stage1_sample = os.path.join(ROOT, "stage1_qr_decoding", "test_images", "phishing_style_ip.png")
+        if os.path.exists(stage1_sample):
+            print(f"[*] No image specified. Importing test QR data directly from Stage 1: {os.path.relpath(stage1_sample, ROOT)}\n")
+            target = stage1_sample
+        else:
+            print("Usage: python pipeline.py <path_to_qr_image>")
+            sys.exit(1)
+    else:
+        target = sys.argv[1]
+    res = run_pipeline(target)
     print(summarize(res))
     print("\n--- full JSON ---")
     print(json.dumps(res, indent=2))

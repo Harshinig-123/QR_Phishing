@@ -17,32 +17,57 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union
 from urllib.parse import urlsplit
 
-# Locate Stage 2 directory to reuse canonical shortener and keyword definitions
+# Locate Stage 1 and Stage 2 directories to import data and types directly from the pipeline stages
 REPO_ROOT = Path(__file__).resolve().parent.parent
+STAGE1_DIR = REPO_ROOT / "stage1_qr_decoding"
 STAGE2_DIR = REPO_ROOT / "stage2_heuristics"
-if str(STAGE2_DIR) not in sys.path:
-    sys.path.insert(0, str(STAGE2_DIR))
+for p in [str(REPO_ROOT), str(STAGE1_DIR), str(STAGE2_DIR)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
+# Direct data import from Stage 1: decoding result contract
 try:
-    from heuristics import SHORTENER_DOMAINS, PHISHING_KEYWORDS
+    from stage1_qr_decoding.qr_decoder import QRDecodeResult
 except ImportError:
-    # Safe standalone fallback in isolated environments
-    SHORTENER_DOMAINS = frozenset({
-        "bit.ly", "bitly.com", "j.mp", "tinyurl.com", "tiny.cc", "t.co", "goo.gl",
-        "ow.ly", "is.gd", "v.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at",
-        "rb.gy", "bl.ink", "lnkd.in", "t.ly", "s.id", "soo.gd", "qrco.de", "qr.net",
-        "1url.com", "adf.ly", "shorte.st", "x.co", "snip.ly", "short.io", "clck.ru",
-        "u.to", "trib.al", "dlvr.it", "fb.me", "tr.im", "urlz.fr", "shorturl.com",
-        "mcaf.ee", "po.st", "tny.im", "chilp.it", "bc.vc", "ouo.io", "gg.gg",
-    })
-    PHISHING_KEYWORDS = (
-        "login", "signin", "verify", "account", "banking", "secure", "password",
-        "wallet", "confirm", "webscr", "credential", "authenticate", "suspend",
-        "unlock", "billing",
+    try:
+        from qr_decoder import QRDecodeResult
+    except ImportError:
+        QRDecodeResult = None
+
+# Direct data import from Stage 2: canonical shortener, keyword, and TLD datasets
+try:
+    from stage2_heuristics.heuristics import (
+        SHORTENER_DOMAINS,
+        PHISHING_KEYWORDS,
+        SUSPICIOUS_TLDS,
     )
+except ImportError:
+    try:
+        from heuristics import SHORTENER_DOMAINS, PHISHING_KEYWORDS, SUSPICIOUS_TLDS
+    except ImportError:
+        # Safe standalone fallback in isolated environments
+        SHORTENER_DOMAINS = frozenset({
+            "bit.ly", "bitly.com", "j.mp", "tinyurl.com", "tiny.cc", "t.co", "goo.gl",
+            "ow.ly", "is.gd", "v.gd", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at",
+            "rb.gy", "bl.ink", "lnkd.in", "t.ly", "s.id", "soo.gd", "qrco.de", "qr.net",
+            "1url.com", "adf.ly", "shorte.st", "x.co", "snip.ly", "short.io", "clck.ru",
+            "u.to", "trib.al", "dlvr.it", "fb.me", "tr.im", "urlz.fr", "shorturl.com",
+            "mcaf.ee", "po.st", "tny.im", "chilp.it", "bc.vc", "ouo.io", "gg.gg",
+        })
+        PHISHING_KEYWORDS = (
+            "login", "signin", "verify", "account", "banking", "secure", "password",
+            "wallet", "confirm", "webscr", "credential", "authenticate", "suspend",
+            "unlock", "billing",
+        )
+        SUSPICIOUS_TLDS = frozenset({
+            "tk", "ml", "ga", "cf", "gq", "xyz", "top", "click", "work", "zip", "mov",
+            "loan", "country", "kim", "men", "party", "review", "science", "stream",
+            "download", "racing", "win", "bid", "icu", "cyou", "buzz", "rest",
+            "monster", "su",
+        })
 
 SECOND_LEVEL_LABELS = frozenset(
     {"co", "com", "org", "net", "gov", "edu", "ac", "ne", "or", "go"}
@@ -152,15 +177,22 @@ def _safe_default_features() -> Dict[str, Any]:
             for name in FEATURE_ORDER}
 
 
-def extract_ml_features(url: str) -> Dict[str, Any]:
+def extract_ml_features(url: Union[str, Any]) -> Dict[str, Any]:
     """
     Extracts the 23 lexical/structural URL features.
+    Accepts a raw URL string, a Stage 1 QRDecodeResult instance, or a dictionary.
     
     Guarantees:
       - Never performs any network I/O
       - Never raises exceptions on malformed strings or invalid types
       - Returns numerical values matching FEATURE_ORDER
     """
+    if hasattr(url, "url"):
+        # Handle Stage 1 QRDecodeResult object directly
+        url = getattr(url, "url") or ""
+    elif isinstance(url, dict):
+        url = url.get("url") or url.get("raw_data") or ""
+
     if not url or not isinstance(url, str):
         return _safe_default_features()
 

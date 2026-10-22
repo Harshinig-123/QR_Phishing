@@ -60,13 +60,17 @@ stage3_ml/
 pip install -r stage3_ml/requirements.txt
 ```
 
-### 2. Acquire and Clean Dataset (PhiUSIIL - UCI ID 967)
-Fetches the PhiUSIIL Phishing URL dataset, verifies metadata label encodings, strips all 54 precomputed content/traffic columns, and outputs clean `url,label` pairs:
+### 2. Acquire and Regenerate Dataset (`urls_labeled.csv`)
+If `stage3_ml/data/urls_labeled.csv` is missing or you wish to regenerate it from scratch, run:
 ```bash
 python stage3_ml/get_dataset.py
 ```
-* **Dataset Encoding:** Raw `0` = Phishing, Raw `1` = Legitimate.
-* **Standard Project Mapping:** Mapped `1` = Phishing (positive target), Mapped `0` = Legitimate.
+This script:
+1. Downloads the raw PhiUSIIL Phishing URL Dataset (UCI ID 967) archive directly from the UCI Machine Learning Repository (`phiusiil_dataset.zip`).
+2. Verifies label coding (Raw `0` = Phishing, Raw `1` = Legitimate).
+3. Strips all 54 precomputed page-content, DOM, DNS, and third-party traffic columns to guarantee 100% static URL classification.
+4. Maps labels to standard project conventions (`1` = Phishing target, `0` = Legitimate).
+5. Removes duplicate URLs and conflicting labels, outputting the clean 235,370-row CSV at `stage3_ml/data/urls_labeled.csv`.
 
 ### 3. Run Unit Tests (Static Verification)
 Runs unit tests across standard and edge-case URLs, verifying safe defaults and proving that socket connections raise an error if attempted:
@@ -114,18 +118,18 @@ python stage3_ml/benchmark_trad_chehab.py --data-dir /path/to/dataset/
 
 ## 📊 Evaluation & Ablation Results
 
-Evaluated on a held-out test split with **zero domain leakage** (`GroupShuffleSplit`, 80/20 by domain):
+Evaluated on a held-out test split of **9,826 URLs** from the PhiUSIIL (UCI 967) dataset using **GroupShuffleSplit** by domain (guaranteeing zero domain overlap between training and testing):
 
 | Metric | Logistic Regression (Baseline) | Random Forest (Primary) | RF (No-HTTPS Ablation) |
 |---|:---:|:---:|:---:|
-| **Accuracy** | 99.71% | **99.74%** | 95.76% |
-| **Precision** | 100.00% | **100.00%** | 98.83% |
-| **Recall** | 99.34% | **99.40%** | 91.42% |
-| **F1-Score** | 99.67% | **99.70%** | 94.98% |
-| **ROC-AUC** | 0.9983 | **0.9980** | 0.9948 |
+| **Accuracy** | 92.17% | **94.57%** | 89.15% |
+| **Precision** | 95.24% | **97.53%** | 94.87% |
+| **Recall** | 85.40% | **89.16%** | 78.07% |
+| **F1-Score** | 90.05% | **93.16%** | 85.65% |
+| **ROC-AUC** | 0.9612 | **0.9787** | 0.9536 |
 
 ### Honest Academic Benchmark Note
-1. **Protocol Artifacts:** In the full feature set, `is_https` carries significant Gini importance (40.4%). Removing `is_https` drops accuracy from **99.74% to 95.76%** (recall drops to 91.42%), demonstrating the degree to which modern URL classifiers rely on encryption headers.
+1. **Protocol Artifacts:** In the full feature set, `is_https` carries significant Gini importance (43.84%). Removing `is_https` drops accuracy from **94.57% to 89.15%** (recall drops from 89.16% to 78.07%), demonstrating the degree to which modern URL classifiers rely on encryption headers.
 2. **Comparison with Structural / Pixel Papers:** These results are URL-string-based and are **not directly comparable** to pixel-based or structural QR-feature papers (such as Trad & Chehab, arXiv:2505.03451), which inspect physical QR module arrangements.
 
 ---
@@ -145,24 +149,25 @@ Evaluated on a held-out test split with **zero domain leakage** (`GroupShuffleSp
   "phishing_probability": 1.0,
   "top_factors": [
     {
-      "feature": "count_slashes",
-      "value": 4.0,
-      "direction": "phishing",
-      "contribution": 14.4492
-    },
-    {
       "feature": "is_https",
       "value": 0.0,
       "direction": "phishing",
-      "contribution": 12.3981
+      "contribution": 4.759
     },
     {
-      "feature": "path_depth",
-      "value": 2.0,
+      "feature": "hostname_digits",
+      "value": 9.0,
       "direction": "phishing",
-      "contribution": 7.5541
+      "contribution": 3.0061
+    },
+    {
+      "feature": "suspicious_keyword_count",
+      "value": 1.0,
+      "direction": "phishing",
+      "contribution": 0.9264
     }
   ],
   "features": { ... }
 }
 ```
+

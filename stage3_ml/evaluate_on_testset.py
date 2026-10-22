@@ -113,7 +113,7 @@ def generate_example_manifest(manifest_path: Path) -> Path:
                 img.save(str(img_path))
 
                 manifest_rows.append({
-                    "image_path": str(img_path),
+                    "image_path": f"stage3_ml/data/testset_images/{img_name}",
                     "true_label": label,
                     "payload_type": ptype,
                     "url": text,
@@ -134,7 +134,7 @@ def generate_example_manifest(manifest_path: Path) -> Path:
             img.save(str(img_path))
 
             manifest_rows.append({
-                "image_path": str(img_path),
+                "image_path": f"stage3_ml/data/testset_images/{img_name}",
                 "true_label": label,
                 "payload_type": ptype,
                 "url": text,
@@ -193,7 +193,18 @@ def run_evaluation(manifest_path: Path, resolve_online: bool = False):
 
     results = []
     for _, row in df_manifest.iterrows():
-        img_path = str(row["image_path"])
+        raw_img_path = str(row["image_path"]).strip()
+        img_p = Path(raw_img_path)
+        if not img_p.is_file():
+            if (REPO_ROOT / img_p).is_file():
+                img_path = str(REPO_ROOT / img_p)
+            elif (DATA_DIR / "testset_images" / img_p.name).is_file():
+                img_path = str(DATA_DIR / "testset_images" / img_p.name)
+            else:
+                img_path = raw_img_path
+        else:
+            img_path = str(img_p)
+
         true_label = str(row["true_label"]).strip().lower()
         ptype = str(row.get("payload_type", "url")).strip().lower()
         expected_url = str(row.get("url", ""))
