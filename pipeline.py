@@ -71,12 +71,25 @@ def _run_stage(func, ready, name, *args):
         return {"error": f"{type(exc).__name__}: {exc}", "verdict": "unknown"}
 
 
+def _normalize_label(label):
+    """Map whatever a stage calls its verdict onto: phishing / suspicious / legitimate / None."""
+    text = str(label or "").strip().lower()
+    if not text:
+        return None
+    if any(k in text for k in ("phish", "malicious", "high")):
+        return "phishing"
+    if any(k in text for k in ("suspic", "medium", "warn", "caution")):
+        return "suspicious"
+    if any(k in text for k in ("legit", "benign", "safe", "low")):
+        return "legitimate"
+    return None
+
+
 def _stage_vote(stage_result):
-    """'phishing' / 'legitimate' / None (stage gave no usable opinion)."""
+    """'phishing' / 'suspicious' / 'legitimate' / None (no usable opinion)."""
     if not stage_result or stage_result.get("placeholder") or "error" in stage_result:
         return None
-    label = stage_result.get("verdict") or stage_result.get("prediction")
-    return label if label in ("phishing", "legitimate") else None
+    return _normalize_label(stage_result.get("verdict") or stage_result.get("prediction"))
 
 
 def run_pipeline(source, from_bytes=False, assume_scheme=None):
@@ -114,13 +127,23 @@ def run_pipeline(source, from_bytes=False, assume_scheme=None):
     out["stage3"] = _run_stage(_predict_url, STAGE3_READY, "Stage 3", url_for_ml)
 
     # ---- Combine ----
-    # Stage 2 (explainable rules) is the primary signal. Stage 3 (ML) is secondary:
-    # if ONLY the ML layer objects, the result is "suspicious", not "phishing".
+    # Stage 2 (explainable rules) is the primary signal. The ML layer can only raise a
+    # URL to "suspicious" by itself; it never produces a final "phishing" on its own.
+    for name, r in (("Stage 2", out["stage2"]), ("Stage 3", out["stage3"])):
+        raw = (r or {}).get("verdict") or (r or {}).get("prediction")
+        if r and not r.get("placeholder") and "error" not in r and raw \
+                and _normalize_label(raw) is None and str(raw).lower() != "unknown":
+            out["reasons"].append(f"{name} returned an unrecognized verdict label: {raw!r}")
+
     v2, v3 = _stage_vote(out["stage2"]), _stage_vote(out["stage3"])
     if v2 == "phishing":
         out["final_verdict"] = "phishing"
         if v3 == "phishing":
             out["reasons"].append("Both heuristic and ML layers flag this URL.")
+    elif v2 == "suspicious":
+        out["final_verdict"] = "suspicious"
+        out["reasons"].append("Heuristic layer rates this URL as suspicious"
+                              + (" and the ML layer agrees." if v3 == "phishing" else "."))
     elif v3 == "phishing":
         out["final_verdict"] = "suspicious"
         out["reasons"].append(

@@ -28,6 +28,14 @@ with open(os.path.join(tmp, "ml_predict.py"), "w") as f:
     '''))
 sys.path.insert(0, tmp)
 
+# Prefer the repo-root pipeline.py (avoids importing a stale copy kept in this folder)
+_here = os.path.dirname(os.path.abspath(__file__))
+_parent = os.path.dirname(_here)
+for _p in (_parent, _here):
+    if os.path.exists(os.path.join(_p, "pipeline.py")):
+        sys.path.insert(0, _p)
+        break
+
 import pipeline  # noqa: E402
 
 # Once the real Stage 2/3 modules exist in the repo they take precedence over
@@ -78,6 +86,22 @@ def test_ml_only_flag_is_suspicious():
     check("ML-only phishing flag -> suspicious", r["final_verdict"], "suspicious")
 
 
+def test_stage2_suspicious_label_is_understood():
+    original = pipeline._analyze_url
+    pipeline._analyze_url = lambda url: {"resolved_url": url, "verdict": "suspicious", "score": 35,
+                                         "triggered_rules": []}
+    r = pipeline.run_pipeline(f"{D}/legit_url.png")
+    pipeline._analyze_url = original
+    check("Stage 2 'suspicious' -> suspicious", r["final_verdict"], "suspicious")
+
+
+def test_label_normalization():
+    n = pipeline._normalize_label
+    assert n("Phishing") == "phishing" and n("SUSPICIOUS") == "suspicious"
+    assert n("legitimate") == "legitimate" and n("unknown") is None and n("") is None
+    print("[PASS] verdict label normalization")
+
+
 def test_placeholders_when_stages_missing():
     saved = (pipeline.STAGE2_READY, pipeline.STAGE3_READY)
     pipeline.STAGE2_READY = pipeline.STAGE3_READY = False
@@ -91,5 +115,7 @@ if __name__ == "__main__":
     test_bytes_input()
     test_stage_crash_is_contained()
     test_ml_only_flag_is_suspicious()
+    test_stage2_suspicious_label_is_understood()
+    test_label_normalization()
     test_placeholders_when_stages_missing()
     print("\nAll pipeline tests passed.")

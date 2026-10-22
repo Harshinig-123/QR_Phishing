@@ -116,63 +116,82 @@ def show_metrics(name, m):
 
 
 def evaluate():
+    norm = pipeline._normalize_label
     with open(MANIFEST, encoding="utf-8") as f:
         manifest = list(csv.DictReader(f))
 
-    rows = []
+    rows, unknown_labels = [], set()
     for m in manifest:
         res = pipeline.run_pipeline(os.path.join(DIR, m["filename"]))
         s1, s2, s3 = res["stage1"], res["stage2"] or {}, res["stage3"] or {}
+        raw2, raw3 = s2.get("verdict", ""), s3.get("prediction", "")
+        for raw in (raw2, raw3):
+            if raw and norm(raw) is None and str(raw).lower() != "unknown":
+                unknown_labels.add(str(raw))
         rows.append({
             "filename": m["filename"], "url": m["url"], "label": m["label"],
             "decoded_ok": s1["status"] == "ok" and s1.get("url") == m["url"],
-            "s2_verdict": s2.get("verdict", ""), "s2_score": s2.get("score", ""),
-            "s3_prediction": s3.get("prediction", ""), "s3_probability": s3.get("probability", ""),
+            "s2_verdict": norm(raw2) or "", "s2_score": s2.get("score", ""),
+            "s3_prediction": norm(raw3) or "", "s3_probability": s3.get("probability", ""),
             "final_verdict": res["final_verdict"],
         })
 
     decode_fail = [r for r in rows if not r["decoded_ok"]]
-    scored = [r for r in rows
-              if r["decoded_ok"] and r["s2_verdict"] in ("phishing", "legitimate")
-              and r["s3_prediction"] in ("phishing", "legitimate")]
+    scored = [r for r in rows if r["decoded_ok"] and r["s2_verdict"] and r["s3_prediction"]]
     n_legit = sum(1 for r in scored if r["label"] == "legitimate")
     n_phish = len(scored) - n_legit
 
     print(f"\nImages: {len(rows)}   decoded correctly: {len(rows) - len(decode_fail)}   "
-          f"scored: {len(scored)} ({n_phish} phishing, {n_legit} legitimate)\n")
-    if len(scored) < len(rows):
-        print("WARNING: some images were not scored (decode failure or a stage returned no verdict).\n")
+          f"scored: {len(scored)} ({n_phish} phishing, {n_legit} legitimate)")
+    if unknown_labels:
+        print(f"WARNING: unrecognized verdict labels (rows with them are NOT scored): {sorted(unknown_labels)}")
+    elif len(scored) < len(rows):
+        print("WARNING: some images were not scored (decode failure or a stage returned no verdict).")
 
-    print("Metrics (positive class = phishing):\n")
-    show_metrics("Stage 2 (heuristics) alone", metrics(scored, lambda r: r["s2_verdict"] == "phishing"))
+    print("\nVerdict breakdown by true label (rows = true label):\n")
+    for layer, key in (("Stage 2 heuristics", "s2_verdict"), ("Stage 3 ML", "s3_prediction"),
+                       ("Hybrid final", "final_verdict")):
+        print(f"  {layer}")
+        for lab in ("phishing", "legitimate"):
+            subset = [r for r in scored if r["label"] == lab]
+            counts = {}
+            for r in subset:
+                counts[r[key]] = counts.get(r[key], 0) + 1
+            text = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "-"
+            print(f"    true {lab:<10} (n={len(subset):>2}): {text}")
+
+    flagged2 = lambda r: r["s2_verdict"] in ("phishing", "suspicious")
+    print("\nMetrics (positive class = phishing):\n")
+    show_metrics("Stage 2: 'phishing' only", metrics(scored, lambda r: r["s2_verdict"] == "phishing"))
+    show_metrics("Stage 2: phishing OR suspicious", metrics(scored, flagged2))
     show_metrics("Stage 3 (ML) alone", metrics(scored, lambda r: r["s3_prediction"] == "phishing"))
-    show_metrics("Hybrid: only 'phishing' counts", metrics(scored, lambda r: r["final_verdict"] == "phishing"))
+    show_metrics("Hybrid: 'phishing' only", metrics(scored, lambda r: r["final_verdict"] == "phishing"))
     show_metrics("Hybrid: phishing OR suspicious", metrics(scored, lambda r: r["final_verdict"] in ("phishing", "suspicious")))
 
     ph = [r for r in scored if r["label"] == "phishing"]
-    both = sum(1 for r in ph if r["s2_verdict"] == "phishing" and r["s3_prediction"] == "phishing")
-    only2 = sum(1 for r in ph if r["s2_verdict"] == "phishing" and r["s3_prediction"] != "phishing")
-    only3 = sum(1 for r in ph if r["s2_verdict"] != "phishing" and r["s3_prediction"] == "phishing")
+    both = sum(1 for r in ph if flagged2(r) and r["s3_prediction"] == "phishing")
+    only2 = sum(1 for r in ph if flagged2(r) and r["s3_prediction"] != "phishing")
+    only3 = sum(1 for r in ph if not flagged2(r) and r["s3_prediction"] == "phishing")
     neither = len(ph) - both - only2 - only3
-    print(f"\nWhich layer catches the {len(ph)} phishing URLs?")
+    print(f"\nWhich layer flags the {len(ph)} phishing URLs? (heuristics flag = phishing or suspicious)")
     print(f"  both layers: {both}   only heuristics: {only2}   only ML: {only3}   neither: {neither}")
 
     legit = [r for r in scored if r["label"] == "legitimate"]
     print(f"\nFalse alarms on the {len(legit)} legitimate URLs: "
-          f"heuristics {sum(r['s2_verdict'] == 'phishing' for r in legit)}, "
+          f"heuristics-flagged {sum(flagged2(r) for r in legit)}, "
           f"ML {sum(r['s3_prediction'] == 'phishing' for r in legit)}, "
           f"hybrid-phishing {sum(r['final_verdict'] == 'phishing' for r in legit)}, "
           f"hybrid-suspicious {sum(r['final_verdict'] == 'suspicious' for r in legit)}")
 
-    print("\nLegitimate URLs that any layer flagged:")
-    flagged = [r for r in legit if r["s2_verdict"] == "phishing" or r["s3_prediction"] == "phishing"]
-    for r in flagged or []:
+    flagged = [r for r in legit if flagged2(r) or r["final_verdict"] in ("phishing", "suspicious")]
+    print(f"\nLegitimate URLs flagged by the HYBRID ({len(flagged)}):")
+    for r in flagged:
         print(f"  S2={r['s2_verdict']:<10} S3={r['s3_prediction']:<10} final={r['final_verdict']:<10} {r['url']}")
     if not flagged:
         print("  none")
 
-    print("\nPhishing URLs the hybrid ('phishing' only) missed:")
     missed = [r for r in ph if r["final_verdict"] != "phishing"]
+    print(f"\nPhishing URLs NOT rated 'phishing' by the hybrid ({len(missed)}):")
     for r in missed:
         print(f"  S2={r['s2_verdict']:<10} S3={r['s3_prediction']:<10} final={r['final_verdict']:<10} {r['url']}")
     if not missed:
