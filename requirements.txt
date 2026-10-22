@@ -1,0 +1,4 @@
+-r stage1_qr_decoding/requirements.txt
+-r stage2_heuristics/requirements.txt
+-r stage3_ml/requirements.txt
+flask>=2.3
