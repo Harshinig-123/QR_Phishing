@@ -239,3 +239,5 @@ live_demo_qr/
 old_results/
 
 stage1_qr_decoding/*.docx
+
+data/trad_chehab/
